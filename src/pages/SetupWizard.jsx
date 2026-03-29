@@ -20,14 +20,14 @@ const RESTAURANT_TYPES = ['Cafe', 'Fine Dining', 'Cloud Kitchen', 'Fast Food', '
 
 export default function SetupWizard() {
   const navigate = useNavigate();
-  const { currentUser, updateProfile } = useAuth();
+  const { currentUser, markRestaurantReady } = useAuth();
   
   const [currentStep, setCurrentStep] = useState(0);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   // Step 1: Profile
-  const [restaurantName, setRestaurantName] = useState(currentUser?.restaurantName || '');
+  const [restaurantName, setRestaurantName] = useState(currentUser?.name || '');
   const [restaurantType, setRestaurantType] = useState('Cafe');
   const [contactNumber, setContactNumber] = useState('');
   const [address, setAddress] = useState('');
@@ -46,9 +46,8 @@ export default function SetupWizard() {
   const [tables, setTables] = useState([]);
 
   useEffect(() => {
-    if (currentUser?.restaurantExists) {
-      // If already has restaurant but in setup, maybe just load name
-      setRestaurantName(currentUser.restaurantName);
+    if (currentUser?.name) {
+      setRestaurantName(currentUser.name);
     }
   }, [currentUser]);
 
@@ -69,16 +68,17 @@ export default function SetupWizard() {
       }
       setIsLoading(true);
       try {
-        const formData = new FormData();
-        formData.append('name', restaurantName);
-        formData.append('type', restaurantType);
-        formData.append('phone', contactNumber);
-        formData.append('address', address);
-        if (logo) formData.append('logo', logo);
+        await restaurantApi.updateProfile({
+          name: restaurantName,
+          phone: contactNumber,
+          address,
+          cuisineTags: [restaurantType],
+        });
 
-        const updated = await restaurantApi.updateProfile(formData);
-        // Refresh auth state to reflect restaurant existence
-        if (updateProfile) updateProfile(updated);
+        if (logo) {
+          await restaurantApi.uploadLogo(logo);
+        }
+
         setCurrentStep(1);
       } catch (err) {
         setError(err.message || 'Failed to save profile.');
@@ -308,7 +308,13 @@ export default function SetupWizard() {
                   </ul>
                 </div>
 
-                <button onClick={() => navigate('/owner/dashboard')} className="btn-primary w-full py-4 tracking-[0.2em]">
+                <button
+                  onClick={() => {
+                    markRestaurantReady(currentUser?.slug || null);
+                    navigate('/owner/dashboard');
+                  }}
+                  className="btn-primary w-full py-4 tracking-[0.2em]"
+                >
                   Go to Dashboard
                 </button>
               </div>

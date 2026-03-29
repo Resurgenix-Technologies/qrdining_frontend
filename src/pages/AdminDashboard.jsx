@@ -181,16 +181,30 @@ export default function AdminDashboard() {
     setLoading(true);
     setError('');
     try {
-      const [adminData, restaurantData, payoutsData, earningsData] = await Promise.all([
-        adminApi.getDashboard().catch(() => null),
-        adminApi.getRestaurants(),
-        adminApi.getPayouts().catch(() => []),
-        adminApi.getEarningsOverview().catch(() => [])
+      const [adminData, restaurantData, payoutsData, earningsData] = await Promise.allSettled([
+        adminApi.getDashboard(),
+        adminApi.getRestaurants({ limit: 100 }),
+        adminApi.getPayouts(),
+        adminApi.getEarningsOverview()
       ]);
-      setStats(adminData);
-      setRestaurants(restaurantData.restaurants || []);
-      setPayouts(payoutsData || []);
-      setEarningsOverview(earningsData || []);
+
+      const restaurantsPayload = restaurantData.status === 'fulfilled' ? restaurantData.value : null;
+      const dashboardPayload = adminData.status === 'fulfilled' ? adminData.value : null;
+      const payoutsPayload = payoutsData.status === 'fulfilled' ? payoutsData.value : [];
+      const earningsPayload = earningsData.status === 'fulfilled' ? earningsData.value : [];
+
+      if (restaurantData.status !== 'fulfilled') {
+        throw restaurantData.reason || new Error('Failed to load restaurants.');
+      }
+
+      setStats(dashboardPayload);
+      setRestaurants(restaurantsPayload?.restaurants || []);
+      setPayouts(Array.isArray(payoutsPayload) ? payoutsPayload : []);
+      setEarningsOverview(Array.isArray(earningsPayload) ? earningsPayload : []);
+
+      if (adminData.status !== 'fulfilled' || payoutsData.status !== 'fulfilled' || earningsData.status !== 'fulfilled') {
+        setError('Some dashboard panels could not be loaded, but restaurant data is available.');
+      }
     } catch (err) {
       setError(err.message || 'Failed to load admin data.');
     } finally {

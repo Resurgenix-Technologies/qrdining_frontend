@@ -30,9 +30,11 @@ const STATUS_CONFIG = {
   completed: { label: 'Done', icon: CheckCircle, next: null, bg: 'bg-gray-50 border-gray-200', badge: 'bg-gray-100 text-gray-600', dot: 'bg-gray-400' },
 };
 
+const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
 export default function OwnerDashboard() {
   const navigate = useNavigate();
-  const { currentUser, logout } = useAuth();
+  const { user, logout } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'orders';
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -43,11 +45,43 @@ export default function OwnerDashboard() {
   const [categories, setCategories] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [tables, setTables] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [newOrders, setNewOrders] = useState(0);
   const [connected, setConnected] = useState(false);
   const [isAcceptingOrders, setIsAcceptingOrders] = useState(true);
+  const [tabLoading, setTabLoading] = useState({});
+  const [tabErrors, setTabErrors] = useState({});
+  const [loadedTabs, setLoadedTabs] = useState({});
   const socketRef = useRef(null);
+  const loadedTabsRef = useRef({});
+  const [orderNotifications, setOrderNotifications] = useState([]);
+  const notifTimersRef = useRef({});
+
+  // Synthesize a short chime using Web Audio API (no file needed)
+  const playChime = () => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const times = [0, 0.15, 0.3];
+      const freqs = [880, 1108, 1320];
+      times.forEach((t, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freqs[i], ctx.currentTime + t);
+        gain.gain.setValueAtTime(0.35, ctx.currentTime + t);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.4);
+        osc.start(ctx.currentTime + t);
+        osc.stop(ctx.currentTime + t + 0.45);
+      });
+    } catch (_) { /* browser may block autoplay */ }
+  };
+
+  const dismissNotification = (id) => {
+    if (notifTimersRef.current[id]) clearTimeout(notifTimersRef.current[id]);
+    setOrderNotifications(prev => prev.filter(n => n.id !== id));
+  };
 
   const [newCategory, setNewCategory] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState(null);
@@ -61,40 +95,6 @@ export default function OwnerDashboard() {
   const [customDate, setCustomDate] = useState('');
   const dateFilterRef = useRef(dateFilter);
   useEffect(() => { dateFilterRef.current = dateFilter; }, [dateFilter]);
-
-  const fetchFilteredOrders = useCallback(async () => {
-    try {
-      let dateFrom, dateTo;
-      const today = new Date();
-      if (dateFilter === 'today') {
-        const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-        const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
-        dateFrom = start.toISOString();
-        dateTo = end.toISOString();
-      } else if (dateFilter === 'yesterday') {
-        const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
-        const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-        dateFrom = start.toISOString();
-        dateTo = end.toISOString();
-      } else if (dateFilter === 'custom' && customDate) {
-        const start = new Date(customDate);
-        const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
-        dateFrom = start.toISOString();
-        dateTo = end.toISOString();
-      }
-
-      if (dateFrom && dateTo) {
-        const res = await ordersApi.getOrders({ dateFrom, dateTo, limit: 1000, paymentStatus: 'paid' });
-        setOrders(res.orders || []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch filtered orders:', err);
-    }
-  }, [dateFilter, customDate]);
-
-  useEffect(() => {
-    fetchFilteredOrders();
-  }, [fetchFilteredOrders]);
 
   const [showItemModal, setShowItemModal] = useState(false);
   const [showCategoryModal, setShowCategoryModal] = useState(false);
@@ -119,12 +119,13 @@ export default function OwnerDashboard() {
   const [earningsSummary, setEarningsSummary] = useState(null);
 
   // Operating hours state
-  const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  const [selectedHourDay, setSelectedHourDay] = useState('monday');
   const [hoursForm, setHoursForm] = useState(
     DAYS.reduce((acc, d) => ({ ...acc, [d]: { open: '09:00', close: '22:00', isOpen: true } }), {})
   );
   const [hoursSaving, setHoursSaving] = useState(false);
   const [hoursSuccess, setHoursSuccess] = useState('');
+  const [hoursError, setHoursError] = useState('');
   const [selectedPayout, setSelectedPayout] = useState(null);
   const [payoutDateFilter, setPayoutDateFilter] = useState('all');
   const [payoutStatusFilter, setPayoutStatusFilter] = useState('all');
@@ -133,86 +134,263 @@ export default function OwnerDashboard() {
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const fileInputRef = useRef(null);
 
-  const loadData = useCallback(async () => {
+  const buildOrderParams = useCallback(() => {
+    let dateFrom;
+    let dateTo;
+    const today = new Date();
+
+    if (dateFilterRef.current === 'today') {
+      const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+      dateFrom = start.toISOString();
+      dateTo = end.toISOString();
+    } else if (dateFilterRef.current === 'yesterday') {
+      const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+      const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      dateFrom = start.toISOString();
+      dateTo = end.toISOString();
+    } else if (dateFilterRef.current === 'custom' && customDate) {
+      const start = new Date(customDate);
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+      dateFrom = start.toISOString();
+      dateTo = end.toISOString();
+    }
+
+    if (!dateFrom || !dateTo) {
+      return null;
+    }
+
+    return { dateFrom, dateTo, limit: 1000 };
+  }, [customDate]);
+
+  const applyProfileState = useCallback((profile) => {
+    setRestaurant(profile);
+    setIsAcceptingOrders(profile?.isAcceptingOrders !== false);
+
+    if (profile?.operatingHours) {
+      const oh = profile.operatingHours;
+      const normalized = DAYS.reduce((acc, d) => ({
+        ...acc,
+        [d]: { open: oh[d]?.open || '09:00', close: oh[d]?.close || '22:00', isOpen: oh[d]?.isOpen !== false }
+      }), {});
+      setHoursForm(normalized);
+    }
+
+    setProfileForm({
+      name: profile?.name || '',
+      description: profile?.description || '',
+      phone: profile?.phone || '',
+      address: profile?.address || '',
+      city: profile?.city || '',
+      pincode: profile?.pincode || '',
+      logo: profile?.logo || '',
+      cuisineTags: (profile?.cuisineTags || []).join(', '),
+      customMessage: profile?.customMessage || '',
+    });
+
+    setPaymentInfoForm({
+      method: profile?.paymentInfo?.method && profile.paymentInfo.method !== 'cash' ? profile.paymentInfo.method : 'bank',
+      upiId: profile?.paymentInfo?.upiId || '',
+      accountHolderName: profile?.paymentInfo?.accountHolderName || '',
+      bankName: profile?.paymentInfo?.bankName || '',
+      accountNumber: profile?.paymentInfo?.accountNumber || '',
+      ifscCode: profile?.paymentInfo?.ifscCode || '',
+      branchName: profile?.paymentInfo?.branchName || '',
+    });
+  }, []);
+
+  const markTabLoaded = useCallback((tab) => {
+    loadedTabsRef.current[tab] = true;
+    setLoadedTabs(prev => ({ ...prev, [tab]: true }));
+  }, []);
+
+  const withTabRequest = useCallback(async (tab, loader, { force = false } = {}) => {
+    if (!force && loadedTabsRef.current[tab]) {
+      return;
+    }
+
+    setTabLoading(prev => ({ ...prev, [tab]: true }));
+    setTabErrors(prev => ({ ...prev, [tab]: '' }));
+
     try {
-      const [profile, orderStats, cats, items, tbls, payoutData, earningsData, summaryData] = await Promise.all([
-        restaurantApi.getProfile(),
-        ordersApi.getStats(),
-        menuApi.getCategories(),
-        menuApi.getItems(),
-        tablesApi.getTables(),
-        restaurantApi.getPayouts().catch(() => []),
-        ordersApi.getDailyEarnings().catch(() => []),
-        ordersApi.getDailyEarningsSummary().catch(() => null)
-      ]);
-      setRestaurant(profile);
-      setIsAcceptingOrders(profile.isAcceptingOrders !== false);
-      setStats(orderStats);
-      setCategories(cats);
-      setMenuItems(items);
-      setTables(tbls);
-      setPayouts(payoutData || []);
-      setDailyEarnings(earningsData || []);
-      setEarningsSummary(summaryData);
-
-      // Populate operating hours from profile
-      if (profile?.operatingHours) {
-        const oh = profile.operatingHours;
-        const normalized = DAYS.reduce((acc, d) => ({
-          ...acc,
-          [d]: { open: oh[d]?.open || '09:00', close: oh[d]?.close || '22:00', isOpen: oh[d]?.isOpen !== false }
-        }), {});
-        setHoursForm(normalized);
-      }
-
-      setProfileForm({
-        name: profile.name || '',
-        description: profile.description || '',
-        phone: profile.phone || '',
-        address: profile.address || '',
-        city: profile.city || '',
-        pincode: profile.pincode || '',
-        logo: profile.logo || '',
-        cuisineTags: (profile.cuisineTags || []).join(', '),
-        customMessage: profile.customMessage || '',
-      });
-
-      setPaymentInfoForm({
-        method: profile.paymentInfo?.method && profile.paymentInfo.method !== 'cash' ? profile.paymentInfo.method : 'bank',
-        upiId: profile.paymentInfo?.upiId || '',
-        accountHolderName: profile.paymentInfo?.accountHolderName || '',
-        bankName: profile.paymentInfo?.bankName || '',
-        accountNumber: profile.paymentInfo?.accountNumber || '',
-        ifscCode: profile.paymentInfo?.ifscCode || '',
-        branchName: profile.paymentInfo?.branchName || '',
-      });
-    } catch (err) {
-      console.error('Data loading error:', err);
+      await loader();
+      markTabLoaded(tab);
+    } catch (error) {
+      console.error(`${tab} loading error:`, error);
+      setTabErrors(prev => ({
+        ...prev,
+        [tab]: error.message || `Failed to load ${tab}.`,
+      }));
     } finally {
-      setLoading(false);
+      setTabLoading(prev => ({ ...prev, [tab]: false }));
+    }
+  }, [markTabLoaded]);
+
+  const ensureProfileLoaded = useCallback(async ({ force = false } = {}) => {
+    if (restaurant && !force) {
+      return restaurant;
+    }
+
+    const profile = await restaurantApi.getProfile();
+    applyProfileState(profile);
+    markTabLoaded('settings');
+    return profile;
+  }, [restaurant, applyProfileState, markTabLoaded]);
+
+  const loadOrdersData = useCallback(async () => {
+    await ensureProfileLoaded();
+
+    const orderParams = buildOrderParams();
+    const [ordersResult, statsResult] = await Promise.allSettled([
+      orderParams ? ordersApi.getOrders(orderParams) : Promise.resolve({ orders: [] }),
+      ordersApi.getStats(),
+    ]);
+
+    let hasSuccess = false;
+
+    if (ordersResult.status === 'fulfilled') {
+      setOrders(ordersResult.value.orders || []);
+      hasSuccess = true;
+    }
+
+    if (statsResult.status === 'fulfilled') {
+      setStats(statsResult.value || null);
+      hasSuccess = true;
+    }
+
+    if (!hasSuccess) {
+      throw ordersResult.reason || statsResult.reason || new Error('Failed to load orders data.');
+    }
+  }, [buildOrderParams, ensureProfileLoaded]);
+
+  const loadMenuData = useCallback(async () => {
+    const [categoriesResult, itemsResult] = await Promise.allSettled([
+      menuApi.getCategories(),
+      menuApi.getItems(),
+    ]);
+
+    let hasSuccess = false;
+
+    if (categoriesResult.status === 'fulfilled') {
+      setCategories(categoriesResult.value || []);
+      hasSuccess = true;
+    }
+
+    if (itemsResult.status === 'fulfilled') {
+      setMenuItems(itemsResult.value || []);
+      hasSuccess = true;
+    }
+
+    if (!hasSuccess) {
+      throw categoriesResult.reason || itemsResult.reason || new Error('Failed to load menu data.');
     }
   }, []);
 
+  const loadTablesData = useCallback(async () => {
+    await ensureProfileLoaded();
+    const tablesData = await tablesApi.getTables();
+    setTables(tablesData || []);
+  }, [ensureProfileLoaded]);
+
+  const loadAnalyticsData = useCallback(async () => {
+    await ensureProfileLoaded();
+    const orderStats = await ordersApi.getStats();
+    setStats(orderStats || null);
+  }, [ensureProfileLoaded]);
+
+  const loadPaymentsData = useCallback(async () => {
+    await ensureProfileLoaded();
+    const [payoutsResult, earningsResult, summaryResult] = await Promise.allSettled([
+      restaurantApi.getPayouts(),
+      ordersApi.getDailyEarnings(),
+      ordersApi.getDailyEarningsSummary(),
+    ]);
+
+    let hasSuccess = false;
+
+    if (payoutsResult.status === 'fulfilled') {
+      setPayouts(payoutsResult.value || []);
+      hasSuccess = true;
+    }
+
+    if (earningsResult.status === 'fulfilled') {
+      setDailyEarnings(earningsResult.value || []);
+      hasSuccess = true;
+    }
+
+    if (summaryResult.status === 'fulfilled') {
+      setEarningsSummary(summaryResult.value || null);
+      hasSuccess = true;
+    }
+
+    if (!hasSuccess) {
+      throw payoutsResult.reason || earningsResult.reason || summaryResult.reason || new Error('Failed to load payments data.');
+    }
+  }, [ensureProfileLoaded]);
+
+  const loadSettingsData = useCallback(async () => {
+    await ensureProfileLoaded({ force: true });
+  }, [ensureProfileLoaded]);
+
+  // Init socket once on mount, clean up on unmount
   useEffect(() => {
-    loadData();
     const socket = io(SOCKET_URL, { withCredentials: true });
     socketRef.current = socket;
-    socket.on('connect', () => {
-      setConnected(true);
-      if (currentUser?.id) socket.emit('join-restaurant', currentUser.id);
-    });
+    socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
     socket.on('new-order', (order) => {
       if (dateFilterRef.current === 'today') {
         setOrders(prev => [order, ...prev]);
       }
       setNewOrders(n => n + 1);
+
+      // Show animated popup notification
+      const notifId = `notif-${Date.now()}`;
+      const itemCount = (order.items || []).reduce((s, i) => s + (i.quantity || 1), 0);
+      const label = order.orderType === 'Takeaway'
+        ? 'Takeaway'
+        : order.tableNumber ? `Table ${order.tableNumber}` : 'Dine-In';
+      const notif = {
+        id: notifId,
+        label,
+        customerName: order.customerName || 'Guest',
+        itemCount,
+        totalAmount: order.totalAmount,
+        items: (order.items || []).slice(0, 3),
+        createdAt: new Date(),
+      };
+      setOrderNotifications(prev => [notif, ...prev].slice(0, 5));
+      playChime();
+
+      // Auto-dismiss after 12 seconds
+      notifTimersRef.current[notifId] = setTimeout(() => {
+        setOrderNotifications(prev => prev.filter(n => n.id !== notifId));
+        delete notifTimersRef.current[notifId];
+      }, 12000);
     });
     socket.on('order-updated', ({ orderId, status }) => {
       setOrders(prev => prev.map(o => (o._id === orderId || o.id === orderId) ? { ...o, orderStatus: status } : o));
     });
-    return () => socket.disconnect();
-  }, [loadData, currentUser?.id]);
+    return () => {
+      socket.disconnect();
+      // Clear all pending notification timers
+      Object.values(notifTimersRef.current).forEach(clearTimeout);
+    };
+  }, []);
+
+  // Join restaurant socket room once restaurant profile is loaded
+  // IMPORTANT: room key = restaurant._id (NOT user.id)
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket || !restaurant?._id) return;
+    if (socket.connected) {
+      socket.emit('join-restaurant', restaurant._id.toString());
+    } else {
+      socket.once('connect', () => {
+        socket.emit('join-restaurant', restaurant._id.toString());
+      });
+    }
+  }, [restaurant?._id]);
 
   useEffect(() => {
     const tab = searchParams.get('tab');
@@ -226,6 +404,28 @@ export default function OwnerDashboard() {
   useEffect(() => {
     setSearchParams({ tab: activeTab }, { replace: true });
   }, [activeTab, setSearchParams]);
+
+  useEffect(() => {
+    if (activeTab === 'orders') {
+      withTabRequest('orders', loadOrdersData, { force: true });
+    } else if (activeTab === 'menu') {
+      withTabRequest('menu', loadMenuData, { force: true });
+    } else if (activeTab === 'tables') {
+      withTabRequest('tables', loadTablesData, { force: true });
+    } else if (activeTab === 'analytics') {
+      withTabRequest('analytics', loadAnalyticsData, { force: true });
+    } else if (activeTab === 'payments') {
+      withTabRequest('payments', loadPaymentsData, { force: true });
+    } else if (activeTab === 'settings') {
+      withTabRequest('settings', loadSettingsData, { force: true });
+    }
+  }, [activeTab, withTabRequest, loadOrdersData, loadMenuData, loadTablesData, loadAnalyticsData, loadPaymentsData, loadSettingsData]);
+
+  useEffect(() => {
+    if (activeTab !== 'orders') return;
+    if (!loadedTabsRef.current.orders) return;
+    withTabRequest('orders', loadOrdersData, { force: true });
+  }, [activeTab, dateFilter, customDate, withTabRequest, loadOrdersData]);
 
   const totalReceived = payouts.filter(p => p.status === 'Paid').reduce((s, p) => s + p.amount, 0);
   const thisMonthReceived = payouts.filter(p => {
@@ -246,6 +446,25 @@ export default function OwnerDashboard() {
     }
     return true;
   });
+
+  const activeTabLabel = TABS.find(tab => tab.id === activeTab)?.label
+    || (activeTab === 'payments' ? 'Payments' : activeTab === 'settings' ? 'Settings' : 'Dashboard');
+  const showTabLoader = Boolean(tabLoading[activeTab] && !loadedTabs[activeTab]);
+  const activeTabError = tabErrors[activeTab];
+  const monthRevenue = stats?.monthRevenue || 0;
+  const totalOrdersCount = stats?.totalOrders || 0;
+  const averageOrderValue = totalOrdersCount ? monthRevenue / totalOrdersCount : 0;
+  const openDaysCount = DAYS.filter(day => hoursForm[day]?.isOpen).length;
+  const profileChecks = [
+    profileForm?.name,
+    profileForm?.phone,
+    profileForm?.city,
+    profileForm?.address,
+    profileForm?.description,
+    profileForm?.cuisineTags,
+  ];
+  const completedProfileFields = profileChecks.filter(value => String(value || '').trim()).length;
+  const profileCompletionPercent = Math.round((completedProfileFields / profileChecks.length) * 100);
 
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center bg-white">
@@ -625,6 +844,7 @@ export default function OwnerDashboard() {
     try {
       const res = await restaurantApi.uploadLogo(file);
       setProfileForm(prev => ({ ...prev, logo: res.imageUrl }));
+      setRestaurant(prev => prev ? { ...prev, logo: res.imageUrl } : prev);
       setProfileSuccess('Logo uploaded successfully');
       setTimeout(() => setProfileSuccess(''), 3000);
     } catch (err) {
@@ -643,11 +863,65 @@ export default function OwnerDashboard() {
         cuisineTags: profileForm.cuisineTags.split(',').map(t => t.trim()).filter(Boolean),
       };
       const result = await restaurantApi.updateProfile(payload);
-      setRestaurant(result.restaurant || result);
-      setProfileSuccess('Protocol Revised.');
+      if (result.restaurant) {
+        applyProfileState(result.restaurant);
+      } else if (result) {
+        applyProfileState(result);
+      }
+      setProfileSuccess('Profile updated successfully.');
       setTimeout(() => setProfileSuccess(''), 3000);
     } catch (err) { setProfileError(err.message); }
     finally { setProfileLoading(false); }
+  };
+
+  const updateProfileField = (field, value) => {
+    if (profileError) setProfileError('');
+    setProfileForm(prev => ({ ...(prev || {}), [field]: value }));
+  };
+
+  const updateHoursField = (day, field, value) => {
+    if (hoursError) setHoursError('');
+    setHoursForm(prev => ({
+      ...prev,
+      [day]: {
+        ...prev[day],
+        [field]: value,
+      }
+    }));
+  };
+
+  const saveOperatingHours = async () => {
+    setHoursSaving(true);
+    setHoursSuccess('');
+    setHoursError('');
+
+    try {
+      for (const day of DAYS) {
+        const entry = hoursForm[day];
+        if (!entry) continue;
+        if (entry.isOpen && entry.open >= entry.close) {
+          throw new Error(`${day.charAt(0).toUpperCase() + day.slice(1)} opening time must be earlier than closing time.`);
+        }
+      }
+
+      const result = await restaurantApi.updateOperatingHours(hoursForm);
+      const savedRestaurant = result.restaurant;
+
+      if (savedRestaurant?.operatingHours) {
+        setHoursForm(savedRestaurant.operatingHours);
+      }
+
+      if (savedRestaurant) {
+        setRestaurant(savedRestaurant);
+      }
+      setIsAcceptingOrders(result.isAcceptingOrders);
+      setHoursSuccess('Hours saved successfully.');
+      setTimeout(() => setHoursSuccess(''), 3000);
+    } catch (err) {
+      setHoursError(err.message || 'Failed to save hours');
+    } finally {
+      setHoursSaving(false);
+    }
   };
 
   const handleUpdatePayment = async (e) => {
@@ -712,14 +986,20 @@ export default function OwnerDashboard() {
       </div>
 
       <div className="p-3 border-t border-border bg-[#FDFCFB]">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-black flex items-center justify-center text-white font-black text-[10px] rounded-full">
-            {restaurant?.name?.charAt(0) || 'R'}
+        <div className="flex items-center justify-between gap-2 overflow-hidden">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="w-8 h-8 bg-black flex flex-shrink-0 items-center justify-center text-white font-black text-[10px] rounded-full">
+              {restaurant?.name?.charAt(0) || user?.email?.charAt(0)?.toUpperCase() || 'A'}
+            </div>
+            <div className="overflow-hidden">
+              <p className="font-black text-[7px] uppercase tracking-widest text-muted opacity-60">PROPRIETOR</p>
+              <p className="text-[10px] font-bold truncate leading-tight text-gray-900">{restaurant?.name || 'Restaurant'}</p>
+              {user?.email && <p className="text-[8px] truncate leading-tight text-gray-400">{user.email}</p>}
+            </div>
           </div>
-          <div className="overflow-hidden">
-            <p className="font-black text-[7px] uppercase tracking-widest text-muted opacity-60">ADMIN</p>
-            <p className="text-[10px] font-bold truncate leading-tight">{restaurant?.name || 'Restaurant'}</p>
-          </div>
+          <button onClick={handleLogout} title="Log Out" className="p-1.5 flex-shrink-0 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition border border-transparent hover:border-red-100">
+            <LogOut size={14} />
+          </button>
         </div>
       </div>
     </>
@@ -728,16 +1008,74 @@ export default function OwnerDashboard() {
   return (
     <div className="flex h-[calc(100vh-65px)] bg-gray-50/50 text-gray-900 overflow-hidden font-sans">
 
+      {/* ─── REAL-TIME ORDER NOTIFICATION TOASTS ─── */}
+      <div className="fixed top-4 right-4 z-[200] flex flex-col gap-3 pointer-events-none" style={{ maxWidth: '360px', width: '90vw' }}>
+        <AnimatePresence initial={false}>
+          {orderNotifications.map((notif, idx) => (
+            <motion.div
+              key={notif.id}
+              layout
+              initial={{ opacity: 0, x: 120, scale: 0.92 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 120, scale: 0.88 }}
+              transition={{ type: 'spring', damping: 22, stiffness: 260 }}
+              className="pointer-events-auto w-full"
+              style={{ zIndex: 200 - idx }}
+            >
+              <div className="bg-white rounded-2xl shadow-2xl border border-green-100 overflow-hidden">
+                {/* Green progress bar auto-dismiss indicator */}
+                <motion.div
+                  className="h-1 bg-gradient-to-r from-green-400 to-emerald-500"
+                  initial={{ scaleX: 1, originX: 0 }}
+                  animate={{ scaleX: 0 }}
+                  transition={{ duration: 12, ease: 'linear' }}
+                />
+                <div className="p-4">
+                  <div className="flex items-start gap-3">
+                    {/* Icon */}
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center flex-shrink-0 shadow-lg">
+                      <ShoppingBag className="w-5 h-5 text-white" />
+                    </div>
+                    {/* Content */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-green-600 bg-green-50 px-2 py-0.5 rounded-full">New Order</span>
+                        <span className="text-[9px] text-gray-400">{notif.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <p className="font-black text-sm text-gray-900 leading-tight">{notif.label}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">{notif.customerName} · {notif.itemCount} item{notif.itemCount !== 1 ? 's' : ''}</p>
+                      {notif.items.length > 0 && (
+                        <p className="text-[10px] text-gray-400 mt-1 truncate">
+                          {notif.items.map(i => i.name).join(', ')}{(notif.items.length < (notif.itemCount)) ? '…' : ''}
+                        </p>
+                      )}
+                    </div>
+                    {/* Amount + dismiss */}
+                    <div className="flex flex-col items-end gap-2 flex-shrink-0">
+                      <span className="text-base font-black text-gray-900">₹{notif.totalAmount?.toFixed(2)}</span>
+                      <button
+                        onClick={() => dismissNotification(notif.id)}
+                        className="w-6 h-6 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition"
+                      >
+                        <X className="w-3.5 h-3.5 text-gray-500" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+
       {/* ─── DESKTOP SIDEBAR ─── */}
-      {['orders', 'menu', 'tables', 'analytics'].includes(activeTab) && (
-        <aside className="hidden lg:flex flex-col w-56 bg-white border-r border-border shadow-sm z-10 shrink-0 h-full">
-          <SidebarContent />
-        </aside>
-      )}
+      <aside className={`hidden ${activeTab === 'payments' || activeTab === 'settings' ? '' : 'lg:flex'} flex-col w-56 bg-white border-r border-border shadow-sm z-10 shrink-0 h-full`}>
+        <SidebarContent />
+      </aside>
 
       {/* ─── MOBILE SIDEBAR DRAWER ─── */}
       <AnimatePresence>
-        {isSidebarOpen && ['orders', 'menu', 'tables', 'analytics'].includes(activeTab) && (
+        {isSidebarOpen && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsSidebarOpen(false)} className="fixed inset-0 z-[110] bg-black/40 backdrop-blur-sm lg:hidden" />
             <motion.aside initial={{ x: '-100%' }} animate={{ x: 0 }} exit={{ x: '-100%' }} transition={{ type: 'spring', damping: 25, stiffness: 200 }} className="fixed top-0 left-0 bottom-0 z-[120] w-[240px] bg-white border-r border-border shadow-2xl flex flex-col lg:hidden">
@@ -755,6 +1093,21 @@ export default function OwnerDashboard() {
         {/* ─── MAIN CONTENT ─── */}
         <main className="flex-1 overflow-y-auto p-3 sm:p-4 hide-print">
           <div className="max-w-[1600px] mx-auto pb-10">
+            {activeTabError && (
+              <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-600">
+                {activeTabError}
+              </div>
+            )}
+
+            {showTabLoader ? (
+              <div className="rounded-xl border border-border bg-white px-6 py-12 text-center shadow-sm">
+                <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-black border-t-transparent" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                  Loading {activeTabLabel}...
+                </p>
+              </div>
+            ) : (
+              <>
 
             {/* ── ORDERS ── */}
             {activeTab === 'orders' && (
@@ -815,7 +1168,7 @@ export default function OwnerDashboard() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start">
                   {filteredOrders.length === 0 && (
                     <div className="col-span-full py-20 text-center border border-dashed border-gray-200 rounded-xl bg-white">
                       <ShoppingBag className="w-8 h-8 text-gray-200 mx-auto mb-3" />
@@ -826,29 +1179,35 @@ export default function OwnerDashboard() {
                     const status = order.orderStatus || 'new';
                     const cfg = STATUS_CONFIG[status];
                     return (
-                      <div key={order._id} className="bg-white border border-border rounded-lg p-3 relative overflow-hidden shadow-sm hover:shadow-md transition-shadow">
-                        <div className={`absolute top-0 left-0 w-1 h-full ${cfg.badge.split(' ')[0]}`} />
-                        <div className="flex justify-between items-start mb-4 pl-1">
-                          <div className="flex gap-4">
-                            <div className={`w-10 h-10 flex items-center justify-center text-lg font-black rounded-lg ${cfg.badge}`}>
+                      <div key={order._id} className="bg-white border border-border rounded-xl p-4 relative overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                        <div className={`absolute top-0 left-0 w-[5px] h-full ${cfg.badge.split(' ')[0]}`} />
+                        <div className="flex justify-between items-start mb-4 pl-1 w-full gap-2">
+                          <div className="flex gap-3 overflow-hidden flex-1">
+                            <div className={`w-11 h-11 shrink-0 flex items-center justify-center text-xl font-black rounded-[12px] ${cfg.badge}`}>
                               {order.tableNumber}
                             </div>
-                            <div>
-                              <p className="text-[8px] font-bold uppercase tracking-widest text-gray-400">#{order.orderIdString || (order._id || '').slice(-4).toUpperCase()}</p>
-                              <p className="font-bold text-sm text-gray-900 truncate max-w-[120px]">{order.customerName}</p>
+                            <div className="flex-1 min-w-0 pr-1">
+                              <p className="text-[8px] font-black uppercase tracking-[0.15em] text-gray-400 truncate">
+                                #{order.orderIdString || (order._id || '').slice(-4).toUpperCase()}
+                              </p>
+                              <p className="font-bold text-base text-gray-950 truncate mt-0.5">
+                                {order.customerName}
+                              </p>
                             </div>
                           </div>
-                          <div className="text-right">
-                            <p className="text-lg font-black tracking-tight text-gray-900 leading-none">₹{order.totalAmount?.toFixed(0)}</p>
-                            <p className="text-[7px] font-bold text-gray-400 uppercase mt-1">{new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                          <div className="text-right shrink-0">
+                            <p className="text-xl font-black tracking-tighter text-gray-950 leading-none">₹{order.totalAmount?.toFixed(0)}</p>
+                            <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mt-1.5">{new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
                           </div>
                         </div>
 
-                        <div className="space-y-1.5 mb-4 pb-4 border-b border-gray-50 pl-1">
+                        <div className="space-y-2 mb-4 pb-4 border-b border-gray-100 pl-1">
                           {order.items?.map((item, i) => (
-                            <div key={i} className="flex justify-between items-center text-[11px] font-semibold text-gray-600">
-                              <span className="flex items-center gap-3">
-                                <span className="w-5 h-5 bg-gray-50 text-gray-500 font-bold flex items-center justify-center text-[9px] rounded">{item.quantity}</span>
+                            <div key={i} className="flex items-start gap-3 text-xs font-semibold text-gray-700">
+                              <span className="w-5 h-5 bg-gray-50 text-gray-500 font-bold flex items-center justify-center text-[10px] rounded shrink-0">
+                                {item.quantity}
+                              </span>
+                              <span className="leading-tight pt-0.5 break-words">
                                 {item.name}
                               </span>
                             </div>
@@ -856,8 +1215,8 @@ export default function OwnerDashboard() {
                         </div>
 
                         {cfg.next && (
-                          <button onClick={() => handleStatusUpdate(order._id, status)} className="w-full bg-black text-white py-1.5 font-bold text-[9px] uppercase tracking-widest hover:bg-gray-800 transition flex items-center justify-center gap-2 rounded">
-                            {STATUS_CONFIG[cfg.next].label} <ArrowRight className="w-2 h-2" />
+                          <button onClick={() => handleStatusUpdate(order._id, status)} className="w-full bg-black text-white h-[42px] font-black text-[10px] uppercase tracking-[0.2em] hover:bg-gray-800 transition flex items-center justify-center gap-2 rounded-[14px]">
+                            {STATUS_CONFIG[cfg.next].label} <ArrowRight className="w-3 h-3" />
                           </button>
                         )}
                       </div>
@@ -1013,17 +1372,17 @@ export default function OwnerDashboard() {
                   <div className="bg-black text-white p-6 relative overflow-hidden rounded-xl">
                     <BarChart3 size={100} className="absolute -right-6 -bottom-6 opacity-10 rotate-12" />
                     <p className="text-[9px] font-bold tracking-widest uppercase text-gray-400 mb-1">Gross Intake</p>
-                    <div className="text-3xl font-black tracking-tight mb-2">₹{stats?.monthRevenue?.toFixed(0) || '0'}</div>
+                    <div className="text-3xl font-black tracking-tight mb-2">₹{monthRevenue.toFixed(0)}</div>
                     <div className="text-[9px] font-bold text-green-400 flex items-center gap-1"><TrendingUp size={10} /> +22.4%</div>
                   </div>
                   <div className="bg-white border border-border p-6 rounded-xl">
                     <p className="text-[9px] font-bold tracking-widest uppercase text-gray-500 mb-1">Throughput</p>
-                    <div className="text-3xl font-black tracking-tight text-blue-600">{stats?.totalOrders || '0'}</div>
+                    <div className="text-3xl font-black tracking-tight text-blue-600">{totalOrdersCount}</div>
                     <p className="text-[8px] font-bold uppercase text-gray-400 mt-2">Resolved Units</p>
                   </div>
                   <div className="bg-white border border-border p-6 rounded-xl">
                     <p className="text-[9px] font-bold tracking-widest uppercase text-gray-500 mb-1">Processing</p>
-                    <div className="text-3xl font-black tracking-tight text-amber-500">₹{(stats?.monthRevenue / (stats?.totalOrders || 1)).toFixed(0)}</div>
+                    <div className="text-3xl font-black tracking-tight text-amber-500">₹{averageOrderValue.toFixed(0)}</div>
                     <p className="text-[8px] font-bold uppercase text-gray-400 mt-2">Avg Order Value</p>
                   </div>
                 </div>
@@ -1035,9 +1394,11 @@ export default function OwnerDashboard() {
               return (
                 <div className="animate-fade-in space-y-6">
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div>
-                      <h2 className="text-xl md:text-2xl font-black tracking-tighter uppercase leading-none">My Payments</h2>
-                      <p className="text-[9px] text-gray-400 font-bold mt-1">Money received from QR Dining after your daily sales</p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-xl md:text-2xl font-black tracking-tighter uppercase leading-none">My Payments</h2>
+                      </div>
+                      <p className="text-[9px] text-gray-400 font-bold mt-2 ml-0 lg:ml-0">Money received from QR Dining after your daily sales</p>
                     </div>
                   </div>
 
@@ -1296,221 +1657,407 @@ export default function OwnerDashboard() {
             })()}
 
             {activeTab === 'settings' && (
-              <div className="animate-fade-in max-w-5xl">
-                <div className="flex items-center gap-3 mb-6">
-                  <h2 className="text-xl md:text-2xl font-black tracking-tighter uppercase leading-none">Restaurant Settings</h2>
+              <div className="animate-fade-in max-w-7xl space-y-6">
+                <div className="flex items-center gap-3 lg:hidden mb-2">
+                  <h2 className="text-xl font-black tracking-tighter uppercase leading-none">Settings</h2>
                 </div>
+                <div className="overflow-hidden rounded-[28px] border border-gray-200 bg-gradient-to-br from-[#f6f1e8] via-white to-[#eef3f1] shadow-[0_28px_70px_-40px_rgba(15,23,42,0.35)]">
+                  <div className="grid gap-6 px-5 py-6 sm:px-7 lg:grid-cols-[minmax(0,1.35fr)_300px] lg:px-8 lg:py-8">
+                    <div className="space-y-8">
+                      <div className="space-y-6">
+                        <div className="space-y-3">
+                          <span className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/80 px-3 py-1 text-[9px] font-black uppercase tracking-[0.28em] text-gray-600 shadow-sm">
+                            <Settings size={12} className="text-gray-500" />
+                            Restaurant Settings
+                          </span>
+                          <div className="space-y-3">
+                            <h2 className="text-2xl font-black uppercase tracking-[-0.06em] text-gray-950 md:text-4xl">
+                              Shape how your brand feels before the first order arrives.
+                            </h2>
+                            <p className="max-w-2xl text-sm leading-6 text-gray-600">
+                              Update your restaurant identity, customer-facing details, and operating rules from one clean control center.
+                            </p>
+                          </div>
+                        </div>
 
-                {profileError && <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 text-[10px] font-bold uppercase rounded-lg shadow-sm">{profileError}</div>}
-                {profileSuccess && <div className="mb-4 p-3 bg-green-50 border border-green-100 text-green-700 text-[10px] font-bold uppercase rounded-lg shadow-sm">{profileSuccess}</div>}
-
-                <form onSubmit={handleUpdateProfile} className="space-y-6 pb-20">
-
-                  {/* --- SECTION: Brand Identity --- */}
-                  <div className="bg-white border border-border p-6 rounded-xl shadow-sm">
-                    <div className="flex justify-between items-center mb-6 border-b border-gray-50 pb-4">
-                      <div>
-                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-800 flex items-center gap-2"><Store size={14} /> Brand Identity</h3>
-                        <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-1">Logo, Name, and Description</p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="flex h-10 items-center justify-center gap-2 rounded-[14px] border border-gray-200 bg-white px-5 text-[9px] font-black uppercase tracking-[0.15em] text-gray-800 transition hover:border-black hover:text-black"
+                          >
+                            <Upload size={13} />
+                            Upload Logo
+                          </button>
+                          <button
+                            onClick={() => setShowPasswordModal(true)}
+                            type="button"
+                            className="flex h-10 items-center justify-center gap-2 rounded-[14px] bg-black px-5 text-[9px] font-black uppercase tracking-[0.15em] text-white transition hover:bg-gray-800"
+                          >
+                            <Lock size={13} />
+                            Change Password
+                          </button>
+                        </div>
                       </div>
-                      <button onClick={() => setShowPasswordModal(true)} type="button" className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-widest text-black border border-black px-3 py-1.5 rounded-lg hover:bg-black hover:text-white transition shadow-sm">
-                        <Lock size={12} /> Change Password
-                      </button>
-                    </div>
 
-                    <div className="flex flex-col md:flex-row gap-8">
-                      {/* Logo Upload Box */}
-                      <div className="flex flex-col items-center gap-4 w-full md:w-48 shrink-0">
-                        <div className="relative group w-32 h-32 border-2 border-dashed border-gray-300 rounded-xl overflow-hidden flex flex-col items-center justify-center bg-gray-50 hover:border-black transition-colors cursor-pointer" onClick={() => fileInputRef.current?.click()}>
-                          {isUploadingLogo ? (
-                            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-black"></div>
-                          ) : profileForm?.logo ? (
-                            <>
-                              <img src={profileForm.logo} alt="Restaurant Logo" className="w-full h-full object-contain p-2" onError={(e) => { e.target.style.display = 'none' }} />
-                              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                                <Upload className="text-white w-6 h-6" />
-                              </div>
-                            </>
+                      <div className="flex flex-col sm:flex-row gap-6 items-start rounded-2xl pt-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="group relative flex h-[110px] w-[110px] shrink-0 flex-col items-center justify-center gap-2 rounded-[24px] border border-black/5 bg-white shadow-sm transition hover:border-black/20"
+                        >
+                          {restaurant?.logo ? (
+                            <img src={restaurant?.logo} alt="Logo" className="absolute inset-0 h-full w-full rounded-[24px] object-cover" />
                           ) : (
                             <>
-                              <UploadCloud className="w-8 h-8 text-gray-400 group-hover:text-black transition-colors mb-2" />
-                              <span className="text-[8px] font-bold uppercase tracking-widest text-gray-400 group-hover:text-black">Upload Logo</span>
+                              <div className="flex h-10 w-10 items-center justify-center rounded-[12px] bg-black text-lg font-black text-white">
+                                {profileForm?.name?.charAt(0) || restaurant?.name?.charAt(0) || 'R'}
+                              </div>
+                              <span className="text-[7.5px] font-black uppercase tracking-[0.1em] text-gray-500 group-hover:text-black">
+                                Add Logo
+                              </span>
                             </>
                           )}
-                        </div>
-                        <input type="file" accept="image/*" ref={fileInputRef} onChange={handleLogoUpload} className="hidden" />
-                      </div>
+                        </button>
 
-                      <div className="flex-1 space-y-5">
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">Restaurant Name</label>
-                          <input type="text" value={profileForm?.name} onChange={e => setProfileForm({ ...profileForm, name: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" />
+                        <div className="space-y-4 flex-1">
+                          <div>
+                            <p className="text-[9px] font-black uppercase tracking-[0.26em] text-gray-400">Current Profile</p>
+                            <h3 className="mt-1.5 text-xl font-black uppercase tracking-tight text-gray-950">
+                              {profileForm?.name || restaurant?.name || 'Restaurant Name'}
+                            </h3>
+                            <p className="mt-1.5 text-[12px] text-gray-500 font-medium">
+                              {profileForm?.description || restaurant?.description || 'Add a short description so customers immediately understand your style, cuisine, and atmosphere.'}
+                            </p>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 mt-4">
+                            <span className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-transparent px-3 py-1.5 text-[9px] font-black text-gray-700">
+                              <Phone size={12} className="text-gray-400" />
+                              {profileForm?.phone || restaurant?.phone || 'No phone added'}
+                            </span>
+                            <span className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-transparent px-3 py-1.5 text-[9px] font-black text-gray-700">
+                              <MapPin size={12} className="text-gray-400" />
+                              {profileForm?.address || restaurant?.address ? 'Location added' : 'Location incomplete'}
+                            </span>
+                            <span className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-transparent px-3 py-1.5 text-[9px] font-black text-gray-700">
+                              <Tag size={12} className="text-gray-400" />
+                              {profileForm?.cuisineTags || restaurant?.cuisineTags?.length > 0 ? 'Cuisine tags active' : '0 cuisine tags'}
+                            </span>
+                          </div>
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">Restaurant Description</label>
-                          <textarea value={profileForm?.description} onChange={e => setProfileForm({ ...profileForm, description: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg min-h-[80px] outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" placeholder="A brief overview of your restaurant..." />
+                      </div>
+                      <p className="text-[10px] text-gray-500 font-medium pb-1">
+                        Tap the logo tile to upload or replace your restaurant image without leaving settings.
+                      </p>
+
+                      <input type="file" accept="image/*" ref={fileInputRef} onChange={handleLogoUpload} className="hidden" />
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 self-start h-fit">
+                      <div className="rounded-[22px] border border-black/10 bg-white/85 p-4 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-[0.26em] text-gray-400">Store Status</p>
+                        <div className="mt-3 flex items-center gap-3">
+                          <span className={`h-2.5 w-2.5 rounded-full ${isAcceptingOrders ? 'bg-green-500' : 'bg-gray-300'}`} />
+                          <p className="text-sm font-black uppercase tracking-wide text-gray-900">
+                            {isAcceptingOrders ? 'Accepting Orders' : 'Paused'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="rounded-[22px] border border-black/10 bg-white/85 p-4 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-[0.26em] text-gray-400">Open Days</p>
+                        <p className="mt-3 text-3xl font-black tracking-[-0.06em] text-gray-950">
+                          {openDaysCount}
+                        </p>
+                        <p className="mt-1 text-[10px] font-bold uppercase tracking-widest text-gray-500">Days active in current schedule</p>
+                      </div>
+                      <div className="rounded-[22px] border border-black/10 bg-white/85 p-4 shadow-sm">
+                        <p className="text-[9px] font-black uppercase tracking-[0.26em] text-gray-400">Sync Mode</p>
+                        <div className="mt-3 flex items-start gap-3">
+                          <ShieldCheck size={16} className="mt-0.5 text-gray-400" />
+                          <p className="text-[11px] font-bold uppercase tracking-widest leading-5 text-gray-600">
+                            Automatic status sync is active. Hours update your live store availability.
+                          </p>
                         </div>
                       </div>
                     </div>
                   </div>
+                </div>
 
-                  {/* --- Lower Two Columns --- */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {profileError && <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-red-600 shadow-sm">{profileError}</div>}
+                {profileSuccess && <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-green-700 shadow-sm">{profileSuccess}</div>}
 
-                    {/* --- SECTION: Contact & Location --- */}
-                    <div className="bg-white border border-border p-6 rounded-xl shadow-sm h-full flex flex-col">
-                      <div className="mb-6 border-b border-gray-50 pb-4 flex-shrink-0">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-800 flex items-center gap-2"><MapPin size={14} /> Contact & Location</h3>
-                        <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-1">How customers can reach and find you</p>
+                <form onSubmit={handleUpdateProfile} className="grid gap-5 pb-32 xl:grid-cols-[minmax(0,1fr)_370px]">
+
+                  <div className="grid gap-6 xl:col-span-2 xl:grid-cols-[minmax(0,1fr)_370px]">
+
+                    <div className="space-y-5">
+                      {/* --- BRAND IDENTITY --- */}
+                      <div className="rounded-[24px] border border-gray-200 bg-white p-5 sm:p-6 shadow-sm">
+                        <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+                          <div>
+                            <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-gray-950">
+                              <Store size={15} /> Brand Identity
+                            </h3>
+                            <p className="mt-1 text-[13px] text-gray-500">Logo, name, and description shown across the storefront and dashboard.</p>
+                          </div>
+                          <span className="rounded-full bg-gray-100 px-3 py-1.5 text-[8px] font-black uppercase tracking-[0.15em] text-gray-600">Primary</span>
+                        </div>
+                        <div className="mb-5 border-t border-gray-100"></div>
+
+                        <div className="grid gap-4 md:grid-cols-[1fr_2fr]">
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Restaurant Name</label>
+                            <input
+                              type="text"
+                              value={profileForm?.name}
+                              onChange={e => updateProfileField('name', e.target.value)}
+                              className="w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-black focus:bg-white"
+                              placeholder="e.g. SHIMLA BIRYANI"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Restaurant Description</label>
+                            <textarea
+                              value={profileForm?.description}
+                              onChange={e => updateProfileField('description', e.target.value)}
+                              className="min-h-[50px] w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-800 outline-none transition focus:border-black focus:bg-white resize-none"
+                              placeholder="A brief overview of your restaurant..."
+                            />
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-5 flex-1">
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">Contact Phone</label>
-                          <input type="text" value={profileForm?.phone} onChange={e => setProfileForm({ ...profileForm, phone: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" />
+                      {/* --- CONTACT AND LOCATION --- */}
+                      <div className="rounded-[24px] border border-gray-200 bg-white p-5 sm:p-6 shadow-sm">
+                        <div className="mb-4">
+                          <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-gray-950">
+                            <MapPin size={15} /> Contact and Location
+                          </h3>
+                          <p className="mt-1 text-[13px] text-gray-500">Make sure customers can reach you easily and find the restaurant without friction.</p>
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">City</label>
-                          <input type="text" value={profileForm?.city} onChange={e => setProfileForm({ ...profileForm, city: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" />
+                        <div className="mb-5 border-t border-gray-100"></div>
+
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Contact Phone</label>
+                            <input
+                              type="text"
+                              value={profileForm?.phone}
+                              onChange={e => updateProfileField('phone', e.target.value)}
+                              className="w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-black focus:bg-white"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">City</label>
+                            <input
+                              type="text"
+                              value={profileForm?.city}
+                              onChange={e => updateProfileField('city', e.target.value)}
+                              className="w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-black focus:bg-white"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Pincode</label>
+                            <input
+                              type="text"
+                              value={profileForm?.pincode}
+                              onChange={e => updateProfileField('pincode', e.target.value)}
+                              className="w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-black focus:bg-white"
+                            />
+                          </div>
                         </div>
-                        <div className="space-y-1.5">
-                          <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">Pincode</label>
-                          <input type="text" value={profileForm?.pincode} onChange={e => setProfileForm({ ...profileForm, pincode: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" />
+                        <div className="mt-4 space-y-1.5">
+                          <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Street Address</label>
+                          <textarea
+                            value={profileForm?.address}
+                            onChange={e => updateProfileField('address', e.target.value)}
+                            className="min-h-[50px] w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-800 outline-none transition focus:border-black focus:bg-white resize-none"
+                          />
                         </div>
-                        <div className="space-y-1.5 md:col-span-2">
-                          <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">Street Address</label>
-                          <textarea value={profileForm?.address} onChange={e => setProfileForm({ ...profileForm, address: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg min-h-[60px] outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" />
+                      </div>
+
+                      {/* --- ADDITIONAL SPECS --- */}
+                      <div className="rounded-[24px] border border-gray-200 bg-white p-5 sm:p-6 shadow-sm">
+                        <div className="mb-4">
+                          <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-gray-950">
+                            <Tag size={15} /> Additional Specs
+                          </h3>
+                          <p className="mt-1 text-[13px] text-gray-500">Extra metadata that helps with discoverability and customer messaging.</p>
+                        </div>
+                        <div className="mb-5 border-t border-gray-100"></div>
+
+                        <div className="space-y-5">
+                          <div className="space-y-2">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Cuisine Tags (Comma Separated)</label>
+                            <input
+                              type="text"
+                              value={profileForm?.cuisineTags}
+                              onChange={e => updateProfileField('cuisineTags', e.target.value)}
+                              className="w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-black focus:bg-white"
+                              placeholder="Cafe"
+                            />
+                            <p className="text-[8px] font-black uppercase tracking-[0.1em] text-gray-400">Tags improve discoverability and categorization.</p>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Customer Message</label>
+                            <textarea
+                              value={profileForm?.customMessage}
+                              onChange={e => updateProfileField('customMessage', e.target.value)}
+                              className="min-h-[60px] w-full rounded-[14px] border border-gray-200 bg-[#FCFCFC] px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition focus:border-black focus:bg-white resize-none"
+                              placeholder="Thank you for dining with us! We hope you enjoy your meal."
+                            />
+                          </div>
                         </div>
                       </div>
                     </div>
 
                     {/* --- SECTION: Operating Hours --- */}
-                    <div className="bg-white border border-border rounded-xl shadow-sm overflow-hidden">
-                      <div className="p-5 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
-                        <div>
-                          <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 flex items-center gap-2"><Clock size={16} className="text-gray-400" /> Opening Hours</h3>
-                          <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-1">Set your daily operational window</p>
+                    <div className="xl:sticky xl:top-24 xl:self-start">
+                      <div className="overflow-hidden rounded-[26px] border border-gray-200 bg-white p-5 shadow-[0_20px_60px_-45px_rgba(15,23,42,0.35)]">
+                        <div className="mb-4 flex items-center justify-between border-b border-gray-100 pb-3">
+                          <div>
+                            <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.2em] text-gray-950">
+                              <Clock size={14} /> Opening Hours
+                            </h3>
+                            <p className="mt-0.5 text-[11px] text-gray-500">Set daily timings</p>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          {hoursSuccess && <span className="text-[9px] font-bold text-green-600 animate-fade-in">{hoursSuccess}</span>}
-                          <button
-                            type="button"
-                            disabled={hoursSaving}
-                            onClick={async () => {
-                              setHoursSaving(true);
-                              setHoursSuccess('');
-                              try {
-                                const result = await restaurantApi.updateOperatingHours(hoursForm);
-                                setRestaurant(result.restaurant);
-                                setIsAcceptingOrders(result.isAcceptingOrders);
-                                setHoursSuccess('Changes Saved ✓');
-                                setTimeout(() => setHoursSuccess(''), 3000);
-                              } catch (err) {
-                                alert(err.message || 'Failed to save hours');
-                              } finally {
-                                setHoursSaving(false);
-                              }
-                            }}
-                            className="bg-black text-white px-4 py-2 font-black uppercase text-[9px] tracking-widest hover:bg-gray-800 transition rounded-lg disabled:opacity-50 flex items-center gap-2 shadow-sm"
-                          >
-                            {hoursSaving ? <><span className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> Saving</> : <><Save size={12} /> Save Hours</>}
-                          </button>
-                        </div>
-                      </div>
 
-                      <div className="p-5 space-y-4">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3">
-                          {DAYS.map(day => (
-                            <div key={day} className={`flex flex-col sm:flex-row sm:items-center gap-4 p-4 rounded-xl border transition-all ${hoursForm[day]?.isOpen
-                                ? 'border-gray-200 bg-white shadow-sm'
-                                : 'border-gray-100 bg-gray-50/50 opacity-60 grayscale-[0.5]'
-                              }`}>
-                              {/* Day toggle */}
-                              <div className="flex items-center gap-3 w-full sm:w-36 flex-shrink-0 border-b sm:border-b-0 sm:border-r border-gray-100 pb-3 sm:pb-0 sm:pr-4">
-                                <button
-                                  type="button"
-                                  onClick={() => setHoursForm(prev => ({ ...prev, [day]: { ...prev[day], isOpen: !prev[day].isOpen } }))}
-                                  className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${hoursForm[day]?.isOpen ? 'bg-green-500' : 'bg-gray-300'
-                                    }`}
-                                >
-                                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform ${hoursForm[day]?.isOpen ? 'translate-x-[22px]' : 'translate-x-0.5'
-                                    }`} />
-                                </button>
-                                <div className="flex flex-col">
-                                  <span className="text-xs font-black text-gray-800 capitalize tracking-tight">{day}</span>
-                                  <span className={`text-[8px] font-bold uppercase tracking-widest ${hoursForm[day]?.isOpen ? 'text-green-600' : 'text-gray-400'
-                                    }`}>{hoursForm[day]?.isOpen ? 'Accepting Orders' : 'Closed Today'}</span>
+                        <div className="space-y-3">
+                          <div className="space-y-1.5">
+                            <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Select Day</label>
+                            <select
+                              value={selectedHourDay}
+                              onChange={e => setSelectedHourDay(e.target.value)}
+                              className="w-full appearance-none rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-900 outline-none transition hover:border-gray-300 focus:border-black capitalize"
+                              style={{ backgroundImage: "url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\")", backgroundPosition: "right 0.5rem center", backgroundRepeat: "no-repeat", backgroundSize: "1.5em 1.5em", paddingRight: "2.5rem" }}
+                            >
+                              {DAYS.map(d => (
+                                <option key={d} value={d}>{d}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="rounded-[24px] border border-gray-100 bg-[#faf8f4] p-4 shadow-sm">
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                              <p className="text-sm font-black uppercase tracking-[0.15em] text-gray-900">{selectedHourDay}</p>
+                              {(() => {
+                                const isDayOpen = hoursForm[selectedHourDay]?.isOpen !== false;
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateHoursField(selectedHourDay, 'isOpen', !isDayOpen)}
+                                    className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${isDayOpen ? 'bg-[#00c853]' : 'bg-gray-200'}`}
+                                  >
+                                    <span className={`pointer-events-none inline-block h-[24px] w-[24px] transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${isDayOpen ? 'translate-x-5' : 'translate-x-0'}`} />
+                                  </button>
+                                );
+                              })()}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1.5">
+                                <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Opens At</label>
+                                <div className="relative">
+                                  <input
+                                    type="text"
+                                    placeholder="HH:MM"
+                                    maxLength={5}
+                                    value={hoursForm[selectedHourDay]?.open ?? '09:00'}
+                                    disabled={hoursForm[selectedHourDay]?.isOpen === false}
+                                    onChange={e => {
+                                      const val = e.target.value.replace(/[^0-9:]/g, '');
+                                      updateHoursField(selectedHourDay, 'open', val);
+                                    }}
+                                    onBlur={e => {
+                                      let val = e.target.value.trim();
+                                      if (val && !val.includes(':') && val.length <= 4) {
+                                        if (val.length === 3) val = `0${val[0]}:${val.slice(1)}`;
+                                        else if (val.length === 4) val = `${val.slice(0, 2)}:${val.slice(2)}`;
+                                        else if (val.length <= 2) val = `${val.padStart(2, '0')}:00`;
+                                        updateHoursField(selectedHourDay, 'open', val);
+                                      } else if (val && val.includes(':')) {
+                                        const [h, m] = val.split(':');
+                                        val = `${(h || '00').padStart(2, '0')}:${(m || '00').padEnd(2, '0')}`;
+                                        updateHoursField(selectedHourDay, 'open', val.slice(0, 5));
+                                      }
+                                    }}
+                                    className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 pr-10 text-sm font-semibold text-gray-900 outline-none transition focus:border-black disabled:bg-gray-50 disabled:text-gray-400"
+                                  />
+                                  <Clock size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
                                 </div>
                               </div>
 
-                              {/* Times */}
-                              <div className="flex items-center gap-4 flex-1">
-                                <div className="flex-1 min-w-[100px]">
-                                  <label className="text-[8px] font-bold uppercase tracking-widest text-gray-400 block mb-1.5 ml-1">Opens at</label>
-                                  <div className="relative">
-                                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-300" />
-                                    <input
-                                      type="time"
-                                      value={hoursForm[day]?.open || '09:00'}
-                                      disabled={!hoursForm[day]?.isOpen}
-                                      onChange={e => setHoursForm(prev => ({ ...prev, [day]: { ...prev[day], open: e.target.value } }))}
-                                      className="w-full pl-9 pr-3 py-2 text-xs font-bold border border-gray-200 rounded-lg outline-none focus:border-black transition disabled:bg-gray-50 disabled:text-gray-400 bg-white"
-                                    />
-                                  </div>
-                                </div>
-                                <div className="flex items-center self-end pb-2.5">
-                                  <ArrowRight className="text-gray-200 w-4 h-4" />
-                                </div>
-                                <div className="flex-1 min-w-[100px]">
-                                  <label className="text-[8px] font-bold uppercase tracking-widest text-gray-400 block mb-1.5 ml-1">Closes at</label>
-                                  <div className="relative">
-                                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-300" />
-                                    <input
-                                      type="time"
-                                      value={hoursForm[day]?.close || '22:00'}
-                                      disabled={!hoursForm[day]?.isOpen}
-                                      onChange={e => setHoursForm(prev => ({ ...prev, [day]: { ...prev[day], close: e.target.value } }))}
-                                      className="w-full pl-9 pr-3 py-2 text-xs font-bold border border-gray-200 rounded-lg outline-none focus:border-black transition disabled:bg-gray-50 disabled:text-gray-400 bg-white"
-                                    />
-                                  </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-500">Closes At</label>
+                                <div className="relative">
+                                  <input
+                                    type="text"
+                                    placeholder="HH:MM"
+                                    maxLength={5}
+                                    value={hoursForm[selectedHourDay]?.close ?? '22:00'}
+                                    disabled={hoursForm[selectedHourDay]?.isOpen === false}
+                                    onChange={e => {
+                                      const val = e.target.value.replace(/[^0-9:]/g, '');
+                                      updateHoursField(selectedHourDay, 'close', val);
+                                    }}
+                                    onBlur={e => {
+                                      let val = e.target.value.trim();
+                                      if (val && !val.includes(':') && val.length <= 4) {
+                                        if (val.length === 3) val = `0${val[0]}:${val.slice(1)}`;
+                                        else if (val.length === 4) val = `${val.slice(0, 2)}:${val.slice(2)}`;
+                                        else if (val.length <= 2) val = `${val.padStart(2, '0')}:00`;
+                                        updateHoursField(selectedHourDay, 'close', val);
+                                      } else if (val && val.includes(':')) {
+                                        const [h, m] = val.split(':');
+                                        val = `${(h || '00').padStart(2, '0')}:${(m || '00').padEnd(2, '0')}`;
+                                        updateHoursField(selectedHourDay, 'close', val.slice(0, 5));
+                                      }
+                                    }}
+                                    className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 pr-10 text-sm font-semibold text-gray-900 outline-none transition focus:border-black disabled:bg-gray-50 disabled:text-gray-400"
+                                  />
+                                  <Clock size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
                                 </div>
                               </div>
                             </div>
-                          ))}
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="px-5 py-4 bg-gray-50/50 border-t border-gray-100 flex items-center gap-3">
-                        <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                        <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest leading-relaxed">
-                          Automatic sync active • Your store status updates in real-time based on these parameters.
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* --- SECTION: Operational Specs --- */}
-                    <div className="bg-white border border-border p-6 rounded-xl shadow-sm h-full flex flex-col">
-                      <div className="mb-6 border-b border-gray-50 pb-4 flex-shrink-0">
-                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-800 flex items-center gap-2"><Tag size={14} /> Additional Specs</h3>
-                      </div>
-
-                      <div className="space-y-1.5 flex-1 w-full">
-                        <label className="text-[9px] font-bold uppercase tracking-widest text-gray-500">Cuisine Tags (Comma separated)</label>
-                        <input type="text" value={profileForm?.cuisineTags} onChange={e => setProfileForm({ ...profileForm, cuisineTags: e.target.value })} className="w-full px-4 py-2.5 text-xs border border-gray-200 rounded-lg outline-none focus:border-black focus:ring-1 focus:ring-black transition bg-gray-50/50" placeholder="e.g. Italian, Continental, Bakery" />
-                        <p className="text-[8px] text-gray-400 font-bold uppercase tracking-widest mt-1">Tags improve discoverability & categorization.</p>
+                        <div className="mt-4 pt-4">
+                          {hoursError && <p className="mb-2 text-[10px] font-bold text-red-600 uppercase tracking-widest">{hoursError}</p>}
+                          {hoursSuccess && <p className="mb-2 text-[10px] font-bold text-green-600 uppercase tracking-widest">{hoursSuccess}</p>}
+                          <button
+                            type="button"
+                            disabled={hoursSaving}
+                            onClick={saveOperatingHours}
+                            className="flex h-14 w-full items-center justify-center rounded-[20px] bg-black px-4 text-xs font-black uppercase tracking-[0.2em] text-white transition hover:bg-gray-900 disabled:opacity-50"
+                          >
+                            {hoursSaving ? 'Saving...' : 'Save Hours'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* Submit Button Sticky Foot */}
-                  <div className="bg-gray-50/80 backdrop-blur-md border border-gray-200 p-4 rounded-xl flex justify-end sticky bottom-4 z-10 shadow-lg">
-                    <button type="submit" disabled={profileLoading} className="bg-black text-white px-8 py-3 font-black uppercase text-[10px] tracking-widest hover:bg-gray-800 transition rounded-lg shadow-md disabled:opacity-50 flex items-center gap-2">
-                      <Save size={14} /> Update Configuration
-                    </button>
+                  <div className="sticky bottom-3 z-10 xl:col-span-2">
+                    <div className="flex flex-col gap-3 rounded-[24px] border border-gray-200 bg-white/90 p-3 shadow-[0_18px_60px_-40px_rgba(15,23,42,0.45)] backdrop-blur-md md:flex-row md:items-center md:justify-between">
+                      <div>
+                        <p className="text-[9px] font-black uppercase tracking-[0.28em] text-gray-400">Profile Sync</p>
+                        <p className="mt-1 text-sm font-semibold text-gray-600">
+                          Save your restaurant identity, contact details, tags, and customer messaging.
+                        </p>
+                      </div>
+                      <button type="submit" disabled={profileLoading} className="flex h-14 items-center justify-center gap-2 rounded-[20px] bg-black px-8 text-xs font-black uppercase tracking-[0.15em] text-white transition hover:bg-gray-900 disabled:opacity-50">
+                        <Save size={16} /> {profileLoading ? 'Updating...' : 'Update Configuration'}
+                      </button>
+                    </div>
                   </div>
 
                 </form>
               </div>
+            )}
+              </>
             )}
 
           </div>
@@ -1533,7 +2080,7 @@ export default function OwnerDashboard() {
 
               <form onSubmit={handleChangePassword} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Current Key</label>
+                  <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Current Password</label>
                   <input type="password" value={pwForm.current} onChange={e => setPwForm({ ...pwForm, current: e.target.value })} className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg outline-none" required />
                 </div>
                 <div className="space-y-1">

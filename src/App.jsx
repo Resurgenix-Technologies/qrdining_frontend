@@ -12,17 +12,18 @@ import CustomerMenu from "./pages/CustomerMenu";
 import CustomerChat from "./pages/chat/CustormerChat.jsx";
 
 // Protected route for owner-only access
-function OwnerRoute({ children }) {
-    const { currentUser, loading } = useAuth();
-    if (loading)
-        return (
-            <div className="min-h-screen flex items-center justify-center">
-                <div className="w-6 h-6 border-2 border-black border-t-transparent rounded-full animate-spin" />
-            </div>
-        );
-    if (!currentUser) return <Navigate to="/owner-login" />;
-    if (currentUser.role !== "owner") return <Navigate to="/" />;
-    return children;
+function OwnerRoute({ children, requireSetupComplete = false, onlyIncomplete = false }) {
+  const { currentUser, loading } = useAuth();
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="w-6 h-6 border-2 border-black border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+  if (!currentUser) return <Navigate to="/owner-login" />;
+  if (currentUser.role !== 'owner') return <Navigate to="/" />;
+  if (requireSetupComplete && !currentUser.hasRestaurant) return <Navigate to="/owner/setup" replace />;
+  if (onlyIncomplete && currentUser.hasRestaurant) return <Navigate to="/owner/dashboard" replace />;
+  return children;
 }
 
 // Protected route for admin-only access
@@ -37,16 +38,13 @@ function AdminRoute({ children }) {
 
 // Route that redirects logged-in owners away from public pages
 function PublicOnlyRoute({ children }) {
-    const { currentUser, loading } = useAuth();
-    if (loading) return null;
-    if (currentUser && currentUser.role === "owner")
-        return <Navigate to="/owner/dashboard" replace />;
-    if (
-        currentUser &&
-        (currentUser.role === "admin" || currentUser.role === "superadmin")
-    )
-        return <Navigate to="/admin/dashboard" replace />;
-    return children;
+  const { currentUser, loading } = useAuth();
+  if (loading) return null;
+  if (currentUser && currentUser.role === 'owner') {
+    return <Navigate to={currentUser.hasRestaurant ? "/owner/dashboard" : "/owner/setup"} replace />;
+  }
+  if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return <Navigate to="/admin/dashboard" replace />;
+  return children;
 }
 
 // Hide navbar on customer QR routes and admin login
@@ -96,39 +94,19 @@ function App() {
                     element={<CustomerMenu />}
                 />
 
-                {/* ─── Owner Panel ─── */}
-                <Route
-                    path="/owner-login"
-                    element={
-                        <PublicOnlyRoute>
-                            <OwnerLogin />
-                        </PublicOnlyRoute>
-                    }
-                />
-                <Route
-                    path="/owner-signup"
-                    element={
-                        <PublicOnlyRoute>
-                            <OwnerSignup />
-                        </PublicOnlyRoute>
-                    }
-                />
-                <Route
-                    path="/owner/setup"
-                    element={
-                        <OwnerRoute>
-                            <SetupWizard />
-                        </OwnerRoute>
-                    }
-                />
-                <Route
-                    path="/owner/dashboard"
-                    element={
-                        <OwnerRoute>
-                            <OwnerDashboard />
-                        </OwnerRoute>
-                    }
-                />
+        {/* ─── Owner Panel ─── */}
+        <Route path="/owner-login" element={<PublicOnlyRoute><OwnerLogin /></PublicOnlyRoute>} />
+        <Route path="/owner-signup" element={<PublicOnlyRoute><OwnerSignup /></PublicOnlyRoute>} />
+        <Route path="/owner/setup" element={
+          <OwnerRoute onlyIncomplete>
+            <SetupWizard />
+          </OwnerRoute>
+        } />
+        <Route path="/owner/dashboard" element={
+          <OwnerRoute requireSetupComplete>
+            <OwnerDashboard />
+          </OwnerRoute>
+        } />
 
                 {/* ─── Admin Panel (Hidden) ─── */}
                 <Route path="/admin-login" element={<AdminLogin />} />

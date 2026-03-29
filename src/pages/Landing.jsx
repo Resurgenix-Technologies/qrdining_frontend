@@ -117,35 +117,70 @@ export default function Landing() {
       </section>
 
       {/* Pricing */}
-      <section id="pricing" className="py-24 md:py-32 bg-white border-b border-border">
-        <div className="max-w-xl mx-auto px-6 text-center">
-          <p className="text-xs tracking-[0.4em] uppercase text-muted font-semibold mb-4">Pricing</p>
-          <h2 className="text-4xl md:text-5xl heading-font font-bold mb-4">Simple, transparent pricing</h2>
-          <p className="text-muted text-sm mb-12">One plan. Everything included. No hidden fees.</p>
+    {/* Pricing */}
+<section id="pricing" className="py-24 md:py-32 bg-white border-b border-border">
+  <div className="max-w-xl mx-auto px-6 text-center">
+    <p className="text-xs tracking-[0.4em] uppercase text-muted font-semibold mb-4">Pricing</p>
+    <h2 className="text-4xl md:text-5xl heading-font font-bold mb-4">
+      Simple, transparent pricing
+    </h2>
+    <p className="text-muted text-sm mb-12">
+      One plan. Everything included. No hidden fees.
+    </p>
 
-          <div className="border border-border p-10 text-left">
-            <p className="text-[10px] font-bold tracking-widest uppercase text-muted mb-2">Standard Plan</p>
-            <div className="flex items-baseline gap-1 mb-1">
-              <span className="text-5xl font-black">₹1499</span>
-              <span className="text-sm text-muted">/month</span>
-            </div>
-            <p className="text-[10px] text-muted mb-8">+ GST applicable</p>
+    <div className="border border-border p-10 text-left relative overflow-hidden">
+      
+      {/* Discount Badge */}
+      <div className="absolute top-0 right-0 bg-black text-white text-xs font-bold px-4 py-2 tracking-wider">
+        50% OFF
+      </div>
 
-            <div className="space-y-3 mb-10">
-              {['Up to 10 tables', 'Unlimited orders', 'Direct payment to bank', 'Order dashboard', 'Menu management', 'QR code generation'].map((f, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <Check className="w-4 h-4 text-black flex-shrink-0" />
-                  <span className="text-sm">{f}</span>
-                </div>
-              ))}
-            </div>
+      <p className="text-[10px] font-bold tracking-widest uppercase text-muted mb-2">
+        Standard Plan
+      </p>
 
-            <button onClick={() => navigate('/owner-signup')} className="btn-primary w-full flex items-center justify-center gap-2">
-              Get Started <ArrowRight className="w-4 h-4" />
-            </button>
+      {/* MRP Price */}
+      <div className="flex items-center gap-3 mb-2">
+        <span className="text-lg text-muted line-through">₹2999</span>
+        <span className="text-xs bg-black text-white px-2 py-1 rounded">
+          Save ₹1500
+        </span>
+      </div>
+
+      {/* Final Price */}
+      <div className="flex items-baseline gap-1 mb-1">
+        <span className="text-5xl font-black text-black">₹1499</span>
+        <span className="text-sm text-muted">/month</span>
+      </div>
+
+      <p className="text-[10px] text-muted mb-8">+ GST applicable</p>
+
+      {/* Features */}
+      <div className="space-y-3 mb-10">
+        {[
+          'Up to 10 tables',
+          'Unlimited orders',
+          'Direct payment to bank',
+          'Order dashboard',
+          'Menu management',
+          'QR code generation',
+        ].map((f, i) => (
+          <div key={i} className="flex items-center gap-3">
+            <Check className="w-4 h-4 text-black flex-shrink-0" />
+            <span className="text-sm">{f}</span>
           </div>
-        </div>
-      </section>
+        ))}
+      </div>
+
+      <button
+        onClick={() => navigate('/owner-signup')}
+        className="btn-primary w-full flex items-center justify-center gap-2"
+      >
+        Get Started <ArrowRight className="w-4 h-4" />
+      </button>
+    </div>
+  </div>
+</section>
 
       {/* CTA Banner */}
       <section className="bg-black py-24 md:py-32">
