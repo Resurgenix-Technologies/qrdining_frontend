@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { publicApi } from '../utils/api';
+import { isValidEmail } from '../utils/auth';
 import { Plus, Minus, X, Mail, Phone, User, ArrowRight, ShoppingBag, UtensilsCrossed, Package, AlertCircle, Clock, Store } from 'lucide-react';
 
 // Lazy image component
@@ -224,17 +225,24 @@ export default function CustomerMenu() {
 
   const placeOrder = async () => {
     setFormError('');
-    if (!customerName.trim()) { setFormError('Please enter your name.'); return; }
-    if (!customerPhone.trim() || customerPhone.trim().length < 10) { setFormError('Please enter a valid phone number.'); return; }
+    const trimmedName = customerName.trim();
+    const trimmedPhone = customerPhone.trim();
+    const trimmedEmail = customerEmail.trim().toLowerCase();
+    const phoneDigits = trimmedPhone.replace(/\D/g, '');
+
+    if (!trimmedName) { setFormError('Please enter your name.'); return; }
+    if (!trimmedPhone || phoneDigits.length < 10) { setFormError('Please enter a valid phone number.'); return; }
+    if (!trimmedEmail) { setFormError('Please enter your email address.'); return; }
+    if (!isValidEmail(trimmedEmail)) { setFormError('Please enter a valid email address.'); return; }
     if (cart.length === 0) return;
 
     setIsProcessing(true);
     try {
       const result = await publicApi.placeOrder({
         restaurantId: restaurantData._id,
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerEmail: customerEmail.trim(),
+        customerName: trimmedName,
+        customerPhone: trimmedPhone,
+        customerEmail: trimmedEmail,
         tableNumber: orderType === 'Dine-In' && tableNumber ? parseInt(tableNumber) : null,
         orderType,
         specialInstructions: specialInstructions.trim(),
@@ -551,15 +559,15 @@ export default function CustomerMenu() {
               <label className="block text-[10px] font-bold tracking-widest uppercase text-muted">Your Details</label>
               <div className="relative">
                 <User className="w-4 h-4 text-muted-light absolute left-3 top-1/2 -translate-y-1/2" />
-                <input type="text" value={customerName} onChange={e => setCustomerName(e.target.value)} className="input-premium pl-10 !py-3 !text-sm" placeholder="Your name *" />
+                <input type="text" value={customerName} onChange={e => { setCustomerName(e.target.value); if (formError) setFormError(''); }} className="input-premium pl-10 !py-3 !text-sm" placeholder="Your name *" autoComplete="name" required />
               </div>
               <div className="relative">
                 <Phone className="w-4 h-4 text-muted-light absolute left-3 top-1/2 -translate-y-1/2" />
-                <input type="tel" value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} className="input-premium pl-10 !py-3 !text-sm" placeholder="Phone number * (for order updates)" />
+                <input type="tel" value={customerPhone} onChange={e => { setCustomerPhone(e.target.value); if (formError) setFormError(''); }} className="input-premium pl-10 !py-3 !text-sm" placeholder="Phone number * (for order updates)" autoComplete="tel" required />
               </div>
               <div className="relative">
                 <Mail className="w-4 h-4 text-muted-light absolute left-3 top-1/2 -translate-y-1/2" />
-                <input type="email" value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} className="input-premium pl-10 !py-3 !text-sm" placeholder="Email for confirmation (optional)" autoComplete="email" />
+                <input type="email" value={customerEmail} onChange={e => { setCustomerEmail(e.target.value); if (formError) setFormError(''); }} className="input-premium pl-10 !py-3 !text-sm" placeholder="Email address * (required)" autoComplete="email" required />
               </div>
               <textarea
                 value={specialInstructions}

@@ -11,7 +11,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import CustomerMenu from './pages/CustomerMenu';
 
 // Protected route for owner-only access
-function OwnerRoute({ children }) {
+function OwnerRoute({ children, requireSetupComplete = false, onlyIncomplete = false }) {
   const { currentUser, loading } = useAuth();
   if (loading) return (
     <div className="min-h-screen flex items-center justify-center">
@@ -20,6 +20,8 @@ function OwnerRoute({ children }) {
   );
   if (!currentUser) return <Navigate to="/owner-login" />;
   if (currentUser.role !== 'owner') return <Navigate to="/" />;
+  if (requireSetupComplete && !currentUser.hasRestaurant) return <Navigate to="/owner/setup" replace />;
+  if (onlyIncomplete && currentUser.hasRestaurant) return <Navigate to="/owner/dashboard" replace />;
   return children;
 }
 
@@ -36,7 +38,9 @@ function AdminRoute({ children }) {
 function PublicOnlyRoute({ children }) {
   const { currentUser, loading } = useAuth();
   if (loading) return null;
-  if (currentUser && currentUser.role === 'owner') return <Navigate to="/owner/dashboard" replace />;
+  if (currentUser && currentUser.role === 'owner') {
+    return <Navigate to={currentUser.hasRestaurant ? "/owner/dashboard" : "/owner/setup"} replace />;
+  }
   if (currentUser && (currentUser.role === 'admin' || currentUser.role === 'superadmin')) return <Navigate to="/admin/dashboard" replace />;
   return children;
 }
@@ -74,12 +78,12 @@ function App() {
         <Route path="/owner-login" element={<PublicOnlyRoute><OwnerLogin /></PublicOnlyRoute>} />
         <Route path="/owner-signup" element={<PublicOnlyRoute><OwnerSignup /></PublicOnlyRoute>} />
         <Route path="/owner/setup" element={
-          <OwnerRoute>
+          <OwnerRoute onlyIncomplete>
             <SetupWizard />
           </OwnerRoute>
         } />
         <Route path="/owner/dashboard" element={
-          <OwnerRoute>
+          <OwnerRoute requireSetupComplete>
             <OwnerDashboard />
           </OwnerRoute>
         } />

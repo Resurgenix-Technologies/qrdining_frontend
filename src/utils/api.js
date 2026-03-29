@@ -2,19 +2,46 @@
 // All communication with the backend goes through this module.
 
 const BASE_URL = import.meta.env.VITE_API_URL || '/api';
+const AUTH_TOKEN_KEY = 'qr_dining_auth_token';
+const inflightGetRequests = new Map();
+
+export const authTokenStore = {
+  get() {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  },
+  set(token) {
+    if (typeof window === 'undefined') return;
+    if (token) {
+      window.localStorage.setItem(AUTH_TOKEN_KEY, token);
+    } else {
+      window.localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+  },
+  clear() {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(AUTH_TOKEN_KEY);
+  },
+};
 
 /**
  * Core fetch wrapper with credentials (cookies) support.
  */
 async function request(method, path, data = null, isFormData = false) {
+  const isMultipartPayload = isFormData || (typeof FormData !== 'undefined' && data instanceof FormData);
   const options = {
     method,
     credentials: 'include', // Send cookies (JWT)
     headers: {},
   };
 
+  const authToken = authTokenStore.get();
+  if (authToken) {
+    options.headers.Authorization = `Bearer ${authToken}`;
+  }
+
   if (data) {
-    if (isFormData) {
+    if (isMultipartPayload) {
       options.body = data; // FormData, let browser set content-type
     } else {
       options.headers['Content-Type'] = 'application/json';
@@ -22,14 +49,41 @@ async function request(method, path, data = null, isFormData = false) {
     }
   }
 
-  const response = await fetch(`${BASE_URL}${path}`, options);
-  const json = await response.json().catch(() => ({}));
+  const url = `${BASE_URL}${path}`;
+  const requestKey = method === 'GET'
+    ? JSON.stringify({ method, url, authToken })
+    : null;
 
-  if (!response.ok) {
-    throw new Error(json.message || `Request failed with status ${response.status}`);
+  if (requestKey && inflightGetRequests.has(requestKey)) {
+    return inflightGetRequests.get(requestKey);
   }
 
-  return json;
+  const executeRequest = async () => {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type') || '';
+    const json = contentType.includes('application/json')
+      ? await response.json().catch(() => ({}))
+      : {};
+
+    if (!response.ok) {
+      throw new Error(json.message || `Request failed with status ${response.status}`);
+    }
+
+    return json;
+  };
+
+  const requestPromise = executeRequest();
+
+  if (requestKey) {
+    inflightGetRequests.set(requestKey, requestPromise);
+    requestPromise.finally(() => {
+      if (inflightGetRequests.get(requestKey) === requestPromise) {
+        inflightGetRequests.delete(requestKey);
+      }
+    });
+  }
+
+  return requestPromise;
 }
 
 // ─── Convenience Methods ───
@@ -43,7 +97,13 @@ const del = (path) => request('DELETE', path);
 export const authApi = {
   login: (email, password) => post('/auth/restaurant/login', { email, password }),
   adminLogin: (email, password) => post('/auth/admin/login', { email, password }),
+  // Legacy single-step registration (kept for compatibility)
   register: (ownerName, email, password, name) => post('/auth/register', { ownerName, email, password, name }),
+  // Two-step OTP registration
+  initiateRegister: (ownerName, email, password, name) =>
+    post('/auth/register/initiate', { ownerName, email, password, name }),
+  verifyRegister: (email, otp) =>
+    post('/auth/register/verify', { email, otp }),
   logout: () => post('/auth/logout'),
   me: () => get('/auth/me'),
 };
@@ -59,7 +119,7 @@ export const publicApi = {
 // ─── Restaurant Profile API ───
 export const restaurantApi = {
   getProfile: () => get('/restaurant/profile'),
-  updateProfile: (data) => put('/restaurant/profile', data),
+  updateProfile: (data) => put('/restaurant/profile', data, data instanceof FormData),
   uploadLogo: (file) => {
     const fd = new FormData();
     fd.append('image', file);
