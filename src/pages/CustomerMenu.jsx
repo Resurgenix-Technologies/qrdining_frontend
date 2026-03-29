@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { publicApi } from '../utils/api';
+import { paymentsApi, publicApi } from '../utils/api';
+import { openCashfreeCheckout } from '../utils/cashfree';
 import { isValidEmail } from '../utils/auth';
 import { Plus, Minus, X, Mail, Phone, User, ArrowRight, ShoppingBag, UtensilsCrossed, Package, AlertCircle, Clock, Store } from 'lucide-react';
 
@@ -125,8 +126,10 @@ export default function CustomerMenu() {
   const [orderType, setOrderType] = useState('Takeaway');
   const [isCheckout, setIsCheckout] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isVerifyingPayment, setIsVerifyingPayment] = useState(false);
   const [orderPlaced, setOrderPlaced] = useState(false);
   const [placedOrder, setPlacedOrder] = useState(null);
+  const [pendingPayment, setPendingPayment] = useState(null);
 
   // Closed popup state
   const [showClosedPopup, setShowClosedPopup] = useState(false);
@@ -152,6 +155,50 @@ export default function CustomerMenu() {
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [formError, setFormError] = useState('');
 
+  const clearVerificationParam = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('verifyOrderId');
+    url.searchParams.delete('order_id');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, []);
+
+  const verifyExistingOrder = useCallback(async (orderId, fallbackPending = null) => {
+    if (!orderId) return;
+
+    setIsVerifyingPayment(true);
+    setFormError('');
+
+    try {
+      const result = await paymentsApi.verifyOrder(orderId);
+
+      if (result.status === 'paid' && result.order) {
+        setPlacedOrder(result.order);
+        setOrderPlaced(true);
+        setPendingPayment(null);
+        setCart([]);
+        setIsCheckout(false);
+        clearVerificationParam();
+        return;
+      }
+
+      if (result.status === 'failed') {
+        setPendingPayment(fallbackPending);
+        setFormError('Payment was not completed. You can try again with the same checkout session.');
+        clearVerificationParam();
+        return;
+      }
+
+      setPendingPayment(fallbackPending);
+      setFormError('Payment is still pending confirmation. Please wait a few seconds and try again.');
+    } catch (err) {
+      setPendingPayment(fallbackPending);
+      setFormError(err.message || 'We could not verify your payment yet. Please try again.');
+    } finally {
+      setIsVerifyingPayment(false);
+    }
+  }, [clearVerificationParam]);
+
   // Load menu from real backend
   useEffect(() => {
     if (!slug) {
@@ -176,6 +223,15 @@ export default function CustomerMenu() {
       })
       .finally(() => setLoading(false));
   }, [slug]);
+
+  useEffect(() => {
+    const verifyOrderId = new URLSearchParams(window.location.search).get('verifyOrderId');
+    if (!verifyOrderId) {
+      return;
+    }
+
+    verifyExistingOrder(verifyOrderId);
+  }, [verifyExistingOrder]);
 
   // Category items before dietary filter
   const categoryItems = useMemo(() => {
@@ -223,6 +279,32 @@ export default function CustomerMenu() {
     }
   };
 
+  const startCheckout = async (checkoutPayload = null) => {
+    const payload = checkoutPayload || pendingPayment;
+    if (!payload) {
+      setFormError('Payment session is unavailable. Please start checkout again.');
+      return;
+    }
+
+    setFormError('');
+
+    try {
+      const checkoutResult = await openCashfreeCheckout({
+        paymentSessionId: payload.paymentSessionId,
+        mode: payload.mode,
+      });
+
+      if (checkoutResult?.error) {
+        setFormError(checkoutResult.error.message || 'Unable to open the payment page. Please try again.');
+        return;
+      }
+
+      await verifyExistingOrder(payload.orderId, payload);
+    } catch (err) {
+      setFormError(err.message || 'Failed to launch Cashfree checkout. Please try again.');
+    }
+  };
+
   const placeOrder = async () => {
     setFormError('');
     const trimmedName = customerName.trim();
@@ -238,24 +320,31 @@ export default function CustomerMenu() {
 
     setIsProcessing(true);
     try {
-      const result = await publicApi.placeOrder({
+      const result = await paymentsApi.createOrder({
         restaurantId: restaurantData._id,
         customerName: trimmedName,
         customerPhone: trimmedPhone,
         customerEmail: trimmedEmail,
         tableNumber: orderType === 'Dine-In' && tableNumber ? parseInt(tableNumber) : null,
-        orderType,
         specialInstructions: specialInstructions.trim(),
+        returnUrl: window.location.href,
         items: cart.map(i => ({
           name: i.name,
           quantity: i.qty,
           unitPrice: i.price,
         })),
       });
-      setPlacedOrder(result.order);
-      setOrderPlaced(true);
-      setCart([]);
-      setIsCheckout(false);
+
+      const pendingOrder = {
+        orderId: result.orderId,
+        orderDisplayId: result.orderDisplayId,
+        cashfreeOrderId: result.cashfreeOrderId,
+        paymentSessionId: result.paymentSessionId,
+        mode: result.mode,
+      };
+
+      setPendingPayment(pendingOrder);
+      await startCheckout(pendingOrder);
     } catch (err) {
       setFormError(err.message || 'Failed to place order. Please try again.');
     } finally {
@@ -306,6 +395,7 @@ export default function CustomerMenu() {
             <span>Total</span><span>₹{(placedOrder.totalAmount || 0).toFixed(0)}</span>
           </div>
           <p className="text-[10px] font-bold tracking-widest uppercase text-muted mt-4">Order ID: #{placedOrder.orderIdString || (placedOrder._id ? placedOrder._id.toString().slice(-6).toUpperCase() : 'N/A')}</p>
+          <p className="text-xs text-muted mt-1">Payment confirmed through Cashfree.</p>
           {tableNumber && <p className="text-xs text-muted mt-1">Table {tableNumber} • Pay at counter</p>}
         </div>
         <button onClick={() => { setOrderPlaced(false); setPlacedOrder(null); }} className="btn-primary mt-6">
@@ -579,6 +669,15 @@ export default function CustomerMenu() {
             </div>
 
             {formError && <p className="text-xs text-danger font-bold">{formError}</p>}
+            {pendingPayment && !isProcessing && !isVerifyingPayment && (
+              <button
+                type="button"
+                onClick={() => startCheckout()}
+                className="w-full border border-black text-black py-3 text-[10px] font-bold tracking-widest uppercase hover:bg-black hover:text-white transition"
+              >
+                Retry Payment
+              </button>
+            )}
           </div>
 
           {/* Checkout Footer */}
@@ -588,12 +687,13 @@ export default function CustomerMenu() {
               <span className="text-2xl font-black">₹{cartTotal.toFixed(0)}</span>
             </div>
             <p className="text-[10px] text-muted mb-3">💵 Pay at the counter when your food arrives.</p>
+            <p className="text-[10px] text-muted mb-3">Secure online payment powered by Cashfree.</p>
             <button
               onClick={placeOrder}
-              disabled={isProcessing || cart.length === 0}
+              disabled={isProcessing || isVerifyingPayment || cart.length === 0}
               className="btn-primary w-full !py-4 disabled:opacity-30 flex items-center justify-center gap-2"
             >
-              {isProcessing ? (
+              {isProcessing || isVerifyingPayment ? (
                 <><span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Processing...</>
               ) : (
                 <>Place Order • ₹{cartTotal.toFixed(0)}</>

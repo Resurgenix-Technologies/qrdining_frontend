@@ -116,6 +116,11 @@ export const publicApi = {
   getSessionOrders: (sessionId) => get(`/public/orders/session/${sessionId}`),
 };
 
+export const paymentsApi = {
+  createOrder: (orderData) => post('/payments/create-order', orderData),
+  verifyOrder: (orderId) => post('/payments/verify-order', { orderId }),
+};
+
 // ─── Restaurant Profile API ───
 export const restaurantApi = {
   getProfile: () => get('/restaurant/profile'),
