@@ -30,7 +30,7 @@ export const getSuggestions = (userChoices, menuItems) => {
                 itemTags.some((t) => ["Chicken", "Mutton", "Fish"].includes(t))
             )
                 score += 25;
-            if (diet === "Egg" && itemTags.includes("Egg")) score += 20;
+            // if (diet === "Egg" && itemTags.includes("Egg")) score += 20;
 
             // Time match
             if (item.makingTime && item.makingTime <= time) score += 20;

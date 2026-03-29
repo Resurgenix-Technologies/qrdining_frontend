@@ -1,20 +1,18 @@
-import { useState } from "react";
-
-const cravingsList = [
-    "Spicy",
-    "Sweet",
-    "Light",
-    "Heavy",
-    "Drinks",
-    "Snacks",
-    "Diabetic",
-    "Niramish",
-    "Halal",
-    "Vegan",
-];
-
 export default function BadgesVariant({ selected, onChange }) {
-    const toggle = (craving) => {
+    const cravingsList = [
+        "Spicy",
+        "Sweet",
+        "Light",
+        "Heavy",
+        "Drinks",
+        "Snacks",
+        "Diabetic",
+        "Niramish",
+        "Halal",
+        "Vegan",
+    ];
+
+    const toggleCraving = (craving) => {
         if (selected.includes(craving)) {
             onChange(selected.filter((c) => c !== craving));
         } else {
@@ -23,17 +21,17 @@ export default function BadgesVariant({ selected, onChange }) {
     };
 
     return (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 pt-2">
             {cravingsList.map((craving) => {
                 const isSelected = selected.includes(craving);
                 return (
                     <button
                         key={craving}
-                        onClick={() => toggle(craving)}
-                        className={`px-4 py-1.5 text-xs font-bold tracking-widest uppercase rounded-full border transition-all ${
+                        onClick={() => toggleCraving(craving)}
+                        className={`px-5 py-2 text-xs font-bold tracking-widest uppercase rounded-full border transition-all ${
                             isSelected
-                                ? "bg-black text-white border-black"
-                                : "bg-white border-gray-300 hover:border-black text-gray-600"
+                                ? "bg-black text-white border-black shadow-sm"
+                                : "bg-white border-gray-300 hover:border-gray-400 text-gray-700 hover:bg-gray-50"
                         }`}
                     >
                         {craving}
