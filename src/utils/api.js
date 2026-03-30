@@ -137,6 +137,10 @@ export const restaurantApi = {
   },
   changePassword: (currentPassword, newPassword) =>
     put('/restaurant/change-password', { currentPassword, newPassword }),
+  requestEmailChangeOtp: (newEmail) => 
+    post('/restaurant/change-email/request-otp', { newEmail }),
+  verifyEmailChangeOtp: (newEmail, otp) => 
+    post('/restaurant/change-email/verify-otp', { newEmail, otp }),
   getAnalytics: () => get('/restaurant/analytics'),
   getPayouts: () => get('/restaurant/payouts'),
   updateOperatingHours: (operatingHours) => put('/restaurant/operating-hours', { operatingHours }),
@@ -212,7 +216,12 @@ export const adminApi = {
     return get(`/admin/orders${qs ? `?${qs}` : ''}`);
   },
   getPlans: () => get('/admin/plans'),
+  createPlan: (data) => post('/admin/plans', data),
+  updatePlan: (id, data) => put(`/admin/plans/${id}`, data),
+  deletePlan: (id) => del(`/admin/plans/${id}`),
+  togglePlan: (id) => patch(`/admin/plans/${id}/toggle`),
   getSubscriptions: () => get('/admin/subscriptions'),
+  grantSubscription: (data) => post('/admin/subscriptions/grant', data),
   getSettings: () => get('/admin/settings'),
   
   getPayouts: () => get('/admin/payouts'),
@@ -229,4 +238,13 @@ export const couponsApi = {
   createCoupon: (data) => post('/coupons', data),
   updateCoupon: (id, data) => put(`/coupons/${id}`, data),
   deleteCoupon: (id) => del(`/coupons/${id}`),
+};
+
+// ─── Subscription API ───
+export const subscriptionApi = {
+  getSubscription: () => get('/restaurant/subscription'),
+  getPlans: () => get('/restaurant/plans'),
+  cancelSubscription: () => post('/restaurant/subscription/cancel'),
+  createPaymentOrder: (planId, returnUrl) => post('/sub-payments/create-order', { planId, returnUrl }),
+  verifyPaymentOrder: (cashfreeOrderId, planId) => post('/sub-payments/verify-order', { cashfreeOrderId, planId }),
 };
