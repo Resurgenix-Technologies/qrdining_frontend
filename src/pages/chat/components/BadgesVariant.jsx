@@ -1,4 +1,8 @@
+import { useState } from "react";
+
 export default function BadgesVariant({ selected, onChange }) {
+    const [localSelected, setLocalSelected] = useState(selected || []);
+
     const cravingsList = [
         "Spicy",
         "Sweet",
@@ -13,17 +17,20 @@ export default function BadgesVariant({ selected, onChange }) {
     ];
 
     const toggleCraving = (craving) => {
-        if (selected.includes(craving)) {
-            onChange(selected.filter((c) => c !== craving));
+        let newSelected;
+        if (localSelected.includes(craving)) {
+            newSelected = localSelected.filter((c) => c !== craving);
         } else {
-            onChange([...selected, craving]);
+            newSelected = [...localSelected, craving];
         }
+        setLocalSelected(newSelected);
+        onChange(newSelected);
     };
 
     return (
         <div className="flex flex-wrap gap-2 pt-2">
             {cravingsList.map((craving) => {
-                const isSelected = selected.includes(craving);
+                const isSelected = localSelected.includes(craving);
                 return (
                     <button
                         key={craving}

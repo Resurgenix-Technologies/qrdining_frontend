@@ -50,7 +50,7 @@ function PublicOnlyRoute({ children }) {
 // Hide navbar on customer QR routes and admin login
 function AppLayout({ children }) {
     const location = useLocation();
-    const isCustomerRoute = location.pathname.startsWith("/menu/");
+    const isCustomerRoute = location.pathname.startsWith("/menu/") || location.pathname.startsWith("/chat/");
     const isAdminLogin = location.pathname === "/admin-login";
     return (
         <div className="min-h-screen bg-white text-primary font-sans">

@@ -8,7 +8,7 @@ import SplashLoader from './components/SplashLoader'
 
 function Root() {
   // Skip splash on customer QR routes for instant menu load
-  const isCustomerRoute = window.location.pathname.startsWith('/menu/') || window.location.pathname.startsWith('/r/');
+  const isCustomerRoute = window.location.pathname.startsWith('/menu/') || window.location.pathname.startsWith('/chat/') || window.location.pathname.startsWith('/r/');
   const [showSplash, setShowSplash] = useState(!isCustomerRoute);
   const handleSplashComplete = useCallback(() => setShowSplash(false), []);
 

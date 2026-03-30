@@ -216,6 +216,8 @@ export default function CustomerChat() {
     const handleShowRecommendations = async () => {
         if (userChoices.cravings.length === 0) return;
 
+        setCurrentStep((prev) => prev + 1); // Instantly hide the button
+
         addMessage(true, `I am craving: ${userChoices.cravings.join(", ")}`);
         await showTyping();
 

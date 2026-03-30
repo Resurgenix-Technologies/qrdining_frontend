@@ -1341,7 +1341,7 @@ export default function OwnerDashboard() {
                   {tables.map(table => (
                     <div key={table._id} className="bg-white border border-border p-3 rounded-lg flex flex-col items-center hover:shadow-sm transition shadow-sm group">
                       <div className="bg-gray-50 p-2 mb-3 rounded-md border border-gray-100 qr-container">
-                        <QRCodeSVG id={`qr-svg-${table._id}`} value={`${window.location.origin}/menu/${restaurant?.slug || 'default'}/table/${table.tableNumber}`} size={84} level="H" />
+                        <QRCodeSVG id={`qr-svg-${table._id}`} value={`${window.location.origin}/chat/${restaurant?.slug || 'default'}/table/${table.tableNumber}`} size={84} level="H" />
                       </div>
                       <div className="w-full mt-auto">
                         <p className="font-black text-xs tracking-tight border-t border-gray-50 pt-2 text-center mb-2">T-{table.tableNumber}</p>
