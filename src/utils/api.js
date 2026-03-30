@@ -243,6 +243,7 @@ export const couponsApi = {
 // ─── Subscription API ───
 export const subscriptionApi = {
   getSubscription: () => get('/restaurant/subscription'),
+  getHistory: () => get('/restaurant/subscription/history'),
   getPlans: () => get('/restaurant/plans'),
   cancelSubscription: () => post('/restaurant/subscription/cancel'),
   createPaymentOrder: (planId, returnUrl) => post('/sub-payments/create-order', { planId, returnUrl }),

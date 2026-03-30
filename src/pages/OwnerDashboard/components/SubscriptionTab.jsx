@@ -6,6 +6,7 @@ import {
   Sparkles, Calendar, Package, ArrowLeft
 } from 'lucide-react';
 import { subscriptionApi } from '../../../utils/api';
+import { openCashfreeCheckout } from '../../../utils/cashfree';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 const getDaysRemaining = (endDate) => {
@@ -163,6 +164,50 @@ function PlanCard({ plan, isCurrent, onSelect, loading }) {
 }
 
 // ─── Confirm Cancel Modal ────────────────────────────────────────────────────
+
+function PlansModal({ plans, currentPlanId, setSelectedPlanForPayment, paymentLoading, selectedPlanForPayment, onClose }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-gray-900/50 backdrop-blur-sm"
+    >
+      <div className="absolute inset-0" onClick={onClose} />
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0, y: 10 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.95, opacity: 0, y: 10 }}
+        className="relative bg-gray-50 w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+      >
+        <div className="flex-shrink-0 flex items-center justify-between p-6 border-b border-border bg-white relative z-10">
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-widest text-gray-800 flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-gray-400" /> Available Plans
+            </h3>
+            <p className="text-[10px] text-gray-400 mt-1">Choose a plan to renew or upgrade your subscription</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 relative z-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {plans.map((p) => (
+              <PlanCard
+                key={p._id}
+                plan={p}
+                isCurrent={currentPlanId && p._id === currentPlanId}
+                onSelect={(selected) => setSelectedPlanForPayment(selected)}
+                loading={paymentLoading && selectedPlanForPayment?._id === p._id}
+              />
+            ))}
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function CancelModal({ subscription, onConfirm, onClose, loading }) {
   return (
     <motion.div
@@ -316,6 +361,7 @@ function PaymentSuccessBanner({ message, onDismiss }) {
 // ─── Main SubscriptionTab Component ─────────────────────────────────────────
 export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiveTab }) {
   const [subscription, setSubscription] = useState(null);
+  const [history, setHistory] = useState([]);
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -328,17 +374,20 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
 
   const [successMessage, setSuccessMessage] = useState('');
   const [verifyingPayment, setVerifyingPayment] = useState(false);
+  const [showPlansModal, setShowPlansModal] = useState(false);
 
   // ── Load subscription & plans ─────────────────────────────────────────────
   const loadData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [sub, plansData] = await Promise.allSettled([
+      const [sub, historyData, plansData] = await Promise.allSettled([
         subscriptionApi.getSubscription(),
+        subscriptionApi.getHistory(),
         subscriptionApi.getPlans(),
       ]);
       if (sub.status === 'fulfilled') setSubscription(sub.value);
+      if (historyData.status === 'fulfilled') setHistory(historyData.value || []);
       if (plansData.status === 'fulfilled') setPlans(plansData.value || []);
     } catch (err) {
       setError(err.message || 'Failed to load subscription data.');
@@ -370,6 +419,8 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
         const result = await subscriptionApi.verifyPaymentOrder(cashfreeOrderId, planId);
         if (result.status === 'paid') {
           setSubscription(result.subscription);
+          const newHistory = await subscriptionApi.getHistory().catch(() => []);
+          if (newHistory.length) setHistory(newHistory);
           setSuccessMessage(result.message || 'Plan activated successfully!');
           setTimeout(() => setSuccessMessage(''), 8000);
         } else if (result.status === 'failed') {
@@ -411,17 +462,49 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
         throw new Error('Failed to get payment session from gateway.');
       }
 
-      // Use Cashfree JS SDK if available, else redirect via form post
-      if (window.Cashfree) {
-        const cf = await window.Cashfree({ mode: res.mode || 'sandbox' });
-        await cf.checkout({ paymentSessionId: res.paymentSessionId });
+      const checkoutResult = await openCashfreeCheckout({
+        paymentSessionId: res.paymentSessionId,
+        mode: res.mode || 'sandbox',
+      });
+
+      setSelectedPlanForPayment(null);
+
+      if (checkoutResult?.error) {
+        throw new Error(checkoutResult.error.message || 'Payment failed or was cancelled.');
+      }
+
+      setVerifyingPayment(true);
+      
+      let verifyRes;
+      let attempts = 0;
+      const maxAttempts = 4;
+      
+      while (attempts < maxAttempts) {
+        verifyRes = await subscriptionApi.verifyPaymentOrder(res.cashfreeOrderId, plan._id);
+        if (verifyRes.status === 'paid' || verifyRes.status === 'failed') {
+          break;
+        }
+        await new Promise(r => setTimeout(r, 3000));
+        attempts++;
+      }
+      
+      if (verifyRes?.status === 'paid') {
+        setSubscription(verifyRes.subscription);
+        const newHistory = await subscriptionApi.getHistory().catch(() => []);
+        if (newHistory.length) setHistory(newHistory);
+        setSuccessMessage(verifyRes.message || 'Plan activated successfully!');
+        setTimeout(() => setSuccessMessage(''), 8000);
+      } else if (verifyRes?.status === 'failed') {
+        throw new Error('Payment failed or was cancelled.');
       } else {
-        // Fallback: redirect to Cashfree hosted page
-        window.location.href = `https://payments${res.mode === 'production' ? '' : '-test'}.cashfree.com/order/#${res.paymentSessionId}`;
+        throw new Error('Payment verification is taking longer than expected. Please wait a few minutes and refresh.');
       }
     } catch (err) {
       setError(err.message || 'Payment initialization failed.');
+      setTimeout(() => setError(''), 8000);
+    } finally {
       setPaymentLoading(false);
+      setVerifyingPayment(false);
     }
   };
 
@@ -514,9 +597,9 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
           <p className="text-[11px] text-gray-400 text-center max-w-xs mb-6">
             Your restaurant is not on any subscription plan. Choose a plan below to get started.
           </p>
-          <a href="#plans-section" className="px-6 py-2.5 bg-black text-white font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-gray-800 transition flex items-center gap-2">
+          <button onClick={() => setShowPlansModal(true)} className="relative z-10 px-6 py-2.5 bg-black text-white font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-gray-800 transition flex items-center gap-2">
             <Sparkles className="w-3.5 h-3.5" /> View Plans
-          </a>
+          </button>
         </div>
       ) : (
         <>
@@ -527,7 +610,7 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
             className="relative overflow-hidden bg-white rounded-2xl border border-border shadow-sm"
           >
             {/* Background pattern */}
-            <div className="absolute inset-0 opacity-[0.03]"
+            <div className="absolute inset-0 pointer-events-none opacity-[0.03]"
               style={{ backgroundImage: `radial-gradient(circle at 2px 2px, black 1px, transparent 0)`, backgroundSize: '24px 24px' }} />
 
             {/* Expiry/Critical Banner */}
@@ -598,15 +681,16 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
               {/* Right: Action Buttons */}
               <div className="flex flex-col gap-2 w-full md:w-auto">
                 {/* Renew with another plan from plans section - scroll down */}
-                <a href="#plans-section">
-                  <button className="w-full md:w-auto px-5 py-2.5 bg-black text-white font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-gray-800 transition flex items-center justify-center gap-2">
-                    <RefreshCw className="w-3.5 h-3.5" /> Renew / Upgrade
-                  </button>
-                </a>
+                <button 
+                  onClick={() => setShowPlansModal(true)}
+                  className="relative z-10 w-full md:w-auto px-5 py-2.5 bg-black text-white font-black text-[10px] uppercase tracking-widest rounded-xl hover:bg-gray-800 transition flex items-center justify-center gap-2"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" /> Renew / Upgrade
+                </button>
                 {isActive && (
                   <button
                     onClick={() => setShowCancelModal(true)}
-                    className="w-full md:w-auto px-5 py-2.5 border-2 border-gray-100 text-gray-500 font-black text-[10px] uppercase tracking-widest rounded-xl hover:border-red-200 hover:text-red-500 hover:bg-red-50 transition flex items-center justify-center gap-2"
+                    className="relative z-10 w-full md:w-auto px-5 py-2.5 border-2 border-gray-100 text-gray-500 font-black text-[10px] uppercase tracking-widest rounded-xl hover:border-red-200 hover:text-red-500 hover:bg-red-50 transition flex items-center justify-center gap-2"
                   >
                     <Ban className="w-3.5 h-3.5" /> Stop Plan
                   </button>
@@ -668,41 +752,80 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
         </>
       )}
 
-      {/* ─── Available Plans ─── */}
-      {plans.length > 0 && (
+      {/* ─── Payment History ─── */}
+      {history.length > 0 && (
         <motion.div
-          id="plans-section"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15 }}
-          className="space-y-4"
+          transition={{ delay: 0.2 }}
+          className="mt-8 bg-white border border-border rounded-2xl overflow-hidden"
         >
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-800 flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-gray-400" /> Available Plans
-              </h3>
-              <p className="text-[9px] text-gray-400 mt-0.5">Choose a plan to renew or upgrade your subscription</p>
-            </div>
+          <div className="px-6 py-5 border-b border-border bg-gray-50/50">
+            <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-800 flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-gray-400" /> Subscription Payment History
+            </h3>
           </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {plans.map((p) => (
-              <PlanCard
-                key={p._id}
-                plan={p}
-                isCurrent={currentPlanId && p._id === currentPlanId}
-                onSelect={(selected) => setSelectedPlanForPayment(selected)}
-                loading={paymentLoading && selectedPlanForPayment?._id === p._id}
-              />
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-100 text-[9px] uppercase tracking-widest text-gray-500 font-bold">
+                  <th className="px-6 py-4 font-bold">Date</th>
+                  <th className="px-6 py-4 font-bold">Plan</th>
+                  <th className="px-6 py-4 font-bold">Amount</th>
+                  <th className="px-6 py-4 font-bold">Billing Cycle</th>
+                  <th className="px-6 py-4 font-bold">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {history.map((record) => (
+                  <tr key={record._id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-semibold text-gray-800">{new Date(record.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                        <span className="text-[9px] text-gray-400 mt-0.5">{new Date(record.createdAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-700">
+                      {record.planId?.name || 'Unknown Plan'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-medium">
+                      {(record.planId?.currency === 'INR' ? '₹' : record.planId?.currency) || '₹'}{record.planId?.price || 0}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-500 capitalize">
+                      {record.planId?.billingCycle || 'monthly'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex gap-2">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${record.paymentStatus === 'paid' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                          {record.paymentStatus}
+                        </span>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${record.status === 'active' ? 'bg-emerald-50 text-emerald-700' : record.status === 'expired' ? 'bg-gray-100 text-gray-600' : 'bg-orange-50 text-orange-700'}`}>
+                          {record.status}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </motion.div>
       )}
 
       {/* ─── Modals ─── */}
       <AnimatePresence>
-        {showCancelModal && (
+        
+          {showPlansModal && (
+            <PlansModal
+              plans={plans}
+              currentPlanId={currentPlanId}
+              setSelectedPlanForPayment={setSelectedPlanForPayment}
+              paymentLoading={paymentLoading}
+              selectedPlanForPayment={selectedPlanForPayment}
+              onClose={() => setShowPlansModal(false)}
+            />
+          )}
+          {showCancelModal && (
           <CancelModal
             subscription={subscription}
             onConfirm={handleCancel}
