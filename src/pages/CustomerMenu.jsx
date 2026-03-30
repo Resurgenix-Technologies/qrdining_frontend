@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useLocation } from 'react-router-dom';
 import { paymentsApi, publicApi } from '../utils/api';
 import { openCashfreeCheckout } from '../utils/cashfree';
 import { isValidEmail } from '../utils/auth';
@@ -114,6 +114,8 @@ export default function CustomerMenu() {
   const { slug, tableNumber: routeTable } = useParams();
   const [tableNumber, setTableNumber] = useState(routeTable);
 
+  const { state } = useLocation();
+
   const [restaurantData, setRestaurantData] = useState(null);
   const [menu, setMenu] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -122,7 +124,17 @@ export default function CustomerMenu() {
   const [dietFilter, setDietFilter] = useState('all');
 
   // Cart state
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(() => {
+    if (state?.cart) {
+        return state.cart.map(item => ({
+            id: item._id,
+            name: item.name,
+            price: item.price,
+            qty: item.quantity
+        }));
+    }
+    return [];
+  });
   const [orderType, setOrderType] = useState('Takeaway');
   const [isCheckout, setIsCheckout] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -147,6 +159,14 @@ export default function CustomerMenu() {
       }
     }
   }, [routeTable]);
+
+  useEffect(() => {
+    if (window.location.hash === '#checkout' && cart.length > 0) {
+        setIsCheckout(true);
+        // remove the hash
+        window.history.replaceState('', document.title, window.location.pathname + window.location.search);
+    }
+  }, [cart]);
 
   // Customer info
   const [customerName, setCustomerName] = useState('');

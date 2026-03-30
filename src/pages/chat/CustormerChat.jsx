@@ -56,6 +56,7 @@ export default function CustomerChat() {
     const [currentStep, setCurrentStep] = useState(0);
     const [isTyping, setIsTyping] = useState(false);
     const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+    const [toast, setToast] = useState(null);
 
     const [customerInfo, setCustomerInfo] = useState({
         customerName: "",
@@ -199,18 +200,36 @@ export default function CustomerChat() {
         setCurrentStep((prev) => prev + 1);
     };
 
-    const handleAddToOrder = (item) => {
+    const showToast = (msg) => {
+        setToast(msg);
+        setTimeout(() => setToast(null), 2000);
+    };
+
+    const handleUpdateOrder = (item, delta) => {
         setCurrentOrder((prev) => {
             const exists = prev.findIndex((i) => i._id === item._id);
             if (exists !== -1) {
                 const updated = [...prev];
-                updated[exists].quantity = (updated[exists].quantity || 1) + 1;
+                const updatedItem = { ...updated[exists] };
+                const newQty = (updatedItem.quantity || 0) + delta;
+                if (newQty <= 0) {
+                    return updated.filter(i => i._id !== item._id);
+                }
+                updatedItem.quantity = newQty;
+                updated[exists] = updatedItem;
                 return updated;
             }
-            return [...prev, { ...item, quantity: 1 }];
+            if (delta > 0) {
+                return [...prev, { ...item, quantity: 1 }];
+            }
+            return prev;
         });
 
-        addMessage(true, `Added "${item.name}" to my order`);
+        if (delta > 0) {
+            showToast(`Added "${item.name}"`);
+        } else {
+            showToast(`Removed "${item.name}"`);
+        }
     };
 
     const handleShowRecommendations = async () => {
@@ -229,19 +248,26 @@ export default function CustomerChat() {
         );
 
         setTimeout(() => {
+            const itemsToSuggest = suggestions.length ? suggestions : menuItems.slice(0, 8);
             addMessage(
                 false,
                 "",
-                <SuggestedMenu
-                    items={
-                        suggestions.length ? suggestions : menuItems.slice(0, 8)
-                    }
-                    onAddToOrder={handleAddToOrder}
-                />,
+                (order) => (
+                    <SuggestedMenu
+                        items={itemsToSuggest}
+                        onUpdateOrder={handleUpdateOrder}
+                        currentOrder={order}
+                    />
+                ),
             );
             setIsInputEnabled(true);
             scrollToBottom();
         }, 600);
+    };
+
+    const handleReviewOrder = () => {
+        const cartStr = encodeURIComponent(JSON.stringify(currentOrder));
+        navigate(`/menu/${slug}/table/${tableNumber}#checkout`, { state: { cart: currentOrder }});
     };
 
     const handleSend = async () => {
@@ -368,7 +394,7 @@ export default function CustomerChat() {
         );
 
     return (
-        <div className="min-h-screen bg-white flex flex-col">
+        <div className="min-h-screen bg-white flex flex-col w-full">
             {/* Header */}
             <div className="border-b border-border bg-white sticky top-0 z-50">
                 <div className="max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
@@ -384,12 +410,21 @@ export default function CustomerChat() {
                 </div>
             </div>
 
+            {/* Toast Notification */}
+            {toast && (
+                <div className="fixed top-20 left-1/2 transform -translate-x-1/2 bg-black text-white px-6 py-3 rounded-full shadow-lg z-50 transition-all duration-300">
+                    <p className="text-sm font-semibold tracking-wider">
+                        {toast}
+                    </p>
+                </div>
+            )}
+
             {/* Chat Area */}
             <div
                 ref={chatRef}
-                className="max-w-3xl mx-auto items-center justify-between flex-1 overflow-y-auto px-6 py-6 space-y-6 bg-white"
+                className="max-w-3xl mx-auto w-full items-center justify-between flex-1 overflow-x-hidden px-4 py-6 space-y-6 bg-white"
             >
-                <ChatWindow messages={messages} />
+                <ChatWindow messages={messages} currentOrder={currentOrder} />
 
                 {isTyping && (
                     <div className="flex justify-start">
@@ -442,11 +477,20 @@ export default function CustomerChat() {
                             </div>
                         )}
 
-                    {currentOrder.length > 0 && (
-                        <p className="text-center text-xs text-gray-500 mt-3 tracking-widest">
-                            {currentOrder.length} item
-                            {currentOrder.length > 1 ? "s" : ""} in your order
-                        </p>
+                    {/* Checkout Button */}
+                    {currentOrder.length > 0 && isInputEnabled && (
+                        <div className="flex justify-between items-center mt-4 pt-4 border-t border-gray-100">
+                            <div className="text-xs text-gray-500 font-bold tracking-widest uppercase">
+                                {currentOrder.reduce((acc, item) => acc + item.quantity, 0)} item
+                                {currentOrder.reduce((acc, item) => acc + item.quantity, 0) > 1 ? "s" : ""}
+                            </div>
+                            <button
+                                onClick={handleReviewOrder}
+                                className="bg-black text-white px-6 py-2.5 text-[10px] font-bold tracking-widest uppercase rounded-xl hover:bg-gray-800 transition shadow-sm"
+                            >
+                                Checkout
+                            </button>
+                        </div>
                     )}
                 </div>
             </div>

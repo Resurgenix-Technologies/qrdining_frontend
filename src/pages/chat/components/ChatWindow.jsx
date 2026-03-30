@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import SentMessage from "./SentMessage";
 import ReceivedMessage from "./ReceivedMessage";
 
-export default function ChatWindow({ messages }) {
+export default function ChatWindow({ messages, currentOrder }) {
     const scrollRef = useRef(null);
 
     useEffect(() => {
@@ -16,7 +16,7 @@ export default function ChatWindow({ messages }) {
     return (
         <div
             ref={scrollRef}
-            className="flex-1 overflow-y-auto px-6 py-6 space-y-6 bg-white"
+            className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6 bg-white w-full overflow-x-hidden min-w-0"
         >
             <AnimatePresence>
                 {messages.map((msg, i) => (
@@ -25,12 +25,13 @@ export default function ChatWindow({ messages }) {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.3 }}
+                        className="w-full"
                     >
                         {msg.isUser ? (
                             <SentMessage text={msg.text} />
                         ) : (
                             <ReceivedMessage text={msg.text}>
-                                {msg.component}
+                                {typeof msg.component === 'function' ? msg.component(currentOrder) : msg.component}
                             </ReceivedMessage>
                         )}
                     </motion.div>
