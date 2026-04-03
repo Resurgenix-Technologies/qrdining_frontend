@@ -8,8 +8,9 @@ import AdminLogin from "./pages/AdminLogin";
 import SetupWizard from "./pages/SetupWizard";
 import OwnerDashboard from "./pages/OwnerDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
-import CustomerMenu from "./pages/CustomerMenu";
-import CustomerChat from "./pages/chat/CustormerChat.jsx";
+import CustomerMenu from "./pages/CustomerMenu/CustomerMenuSecure.jsx";
+import CustomerChat from "./pages/chat/CustomerChatSecure.jsx";
+import NotFoundPage from "./pages/errors/NotFoundPage.jsx";
 
 // Protected route for owner-only access
 function OwnerRoute({ children, requireSetupComplete = false, onlyIncomplete = false }) {
@@ -50,7 +51,10 @@ function PublicOnlyRoute({ children }) {
 // Hide navbar on customer QR routes and admin login
 function AppLayout({ children }) {
     const location = useLocation();
-    const isCustomerRoute = location.pathname.startsWith("/menu/") || location.pathname.startsWith("/chat/");
+    const isCustomerRoute =
+        location.pathname.startsWith("/menu/") ||
+        location.pathname.startsWith("/chat/") ||
+        location.pathname.startsWith("/r/");
     const isAdminLogin = location.pathname === "/admin-login";
     return (
         <div className="min-h-screen bg-white text-primary font-sans">
@@ -76,6 +80,7 @@ function App() {
 
                 {/* ─── Customer QR Menu (Public — no auth) ─── */}
                 {/* With table: /menu/:slug/table/:tableNumber */}
+                <Route path="/r/:slug/:qrToken" element={<CustomerMenu />} />
                 <Route
                     path="/menu/:slug/table/:tableNumber"
                     element={<CustomerMenu />}
@@ -83,16 +88,9 @@ function App() {
                 {/* Without table (e.g. takeaway QR): /menu/:slug */}
                 <Route path="/menu/:slug" element={<CustomerMenu />} />
                 {/*chat option */}
-                <Route
-                    path="/chat/:slug/table/:tableNumber"
-                    element={<CustomerChat />}
-                />
+                <Route path="/chat/:slug/:qrToken" element={<CustomerChat />} />
 
                 {/* ─── Legacy QR format support ─── */}
-                <Route
-                    path="/r/:restaurantId/table/:tableId"
-                    element={<CustomerMenu />}
-                />
 
         {/* ─── Owner Panel ─── */}
         <Route path="/owner-login" element={<PublicOnlyRoute><OwnerLogin /></PublicOnlyRoute>} />
@@ -136,7 +134,7 @@ function App() {
                 />
 
                 {/* ─── Catch-all ─── */}
-                <Route path="*" element={<Navigate to="/" />} />
+                <Route path="*" element={<NotFoundPage />} />
             </Routes>
         </AppLayout>
     );

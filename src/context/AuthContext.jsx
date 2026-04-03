@@ -1,38 +1,11 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { authApi, authTokenStore } from '../utils/api';
+import { authApi } from '../utils/api';
 
 const AuthContext = createContext(null);
-const AUTH_USER_KEY = 'qr_dining_auth_user';
-
-const authUserStore = {
-  get() {
-    if (typeof window === 'undefined') return null;
-
-    try {
-      const rawUser = window.localStorage.getItem(AUTH_USER_KEY);
-      return rawUser ? JSON.parse(rawUser) : null;
-    } catch {
-      window.localStorage.removeItem(AUTH_USER_KEY);
-      return null;
-    }
-  },
-  set(user) {
-    if (typeof window === 'undefined') return;
-    if (user) {
-      window.localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-    } else {
-      window.localStorage.removeItem(AUTH_USER_KEY);
-    }
-  },
-  clear() {
-    if (typeof window === 'undefined') return;
-    window.localStorage.removeItem(AUTH_USER_KEY);
-  },
-};
 
 export function AuthProvider({ children }) {
-  const [currentUser, setCurrentUser] = useState(() => authUserStore.get());
-  const [loading, setLoading] = useState(() => Boolean(authTokenStore.get()));
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   const toSessionUser = useCallback((user, overrides = {}) => ({
     id: user.id || user._id || null,
@@ -44,33 +17,18 @@ export function AuthProvider({ children }) {
     ...overrides,
   }), []);
 
-  const updateCurrentUser = useCallback((user) => {
-    setCurrentUser(user);
-    authUserStore.set(user);
-  }, []);
-
   // Restore session on mount by calling /api/auth/me
   useEffect(() => {
-    const token = authTokenStore.get();
-    if (!token) {
-      authUserStore.clear();
-      setCurrentUser(null);
-      setLoading(false);
-      return;
-    }
-
     setLoading(true);
     authApi.me()
       .then(({ user }) => {
-        updateCurrentUser(toSessionUser(user));
+        setCurrentUser(toSessionUser(user));
       })
       .catch(() => {
-        authTokenStore.clear();
-        authUserStore.clear();
         setCurrentUser(null);
       })
       .finally(() => setLoading(false));
-  }, [toSessionUser, updateCurrentUser]);
+  }, [toSessionUser]);
 
   // Step 1: Initiate registration (sends OTP to email)
   const initiateSignup = useCallback(async (ownerName, email, password, restaurantName) => {
@@ -80,37 +38,30 @@ export function AuthProvider({ children }) {
 
   // Step 2: Verify OTP and create account
   const verifySignup = useCallback(async (email, otp) => {
-    const { user, token } = await authApi.verifyRegister(email, otp);
-    authTokenStore.set(token);
+    const { user } = await authApi.verifyRegister(email, otp);
     const sessionUser = toSessionUser(user, { hasRestaurant: false });
-    updateCurrentUser(sessionUser);
+    setCurrentUser(sessionUser);
     return sessionUser;
-  }, [toSessionUser, updateCurrentUser]);
+  }, [toSessionUser]);
 
   // Login for both restaurant owners and admins
   const login = useCallback(async (email, password, isAdmin = false) => {
     let user;
-    let token;
     if (isAdmin) {
       const result = await authApi.adminLogin(email, password);
       user = result.user;
-      token = result.token;
     } else {
       const result = await authApi.login(email, password);
       user = result.user;
-      token = result.token;
     }
 
-    authTokenStore.set(token);
     const sessionUser = toSessionUser(user);
-    updateCurrentUser(sessionUser);
+    setCurrentUser(sessionUser);
     return sessionUser;
-  }, [toSessionUser, updateCurrentUser]);
+  }, [toSessionUser]);
 
   const logout = useCallback(async () => {
     await authApi.logout().catch(() => {});
-    authTokenStore.clear();
-    authUserStore.clear();
     setCurrentUser(null);
   }, []);
 
@@ -118,9 +69,7 @@ export function AuthProvider({ children }) {
   const markRestaurantReady = useCallback((slug) => {
     setCurrentUser(prev => {
       if (!prev) return prev;
-      const updatedUser = { ...prev, hasRestaurant: true, slug };
-      authUserStore.set(updatedUser);
-      return updatedUser;
+      return { ...prev, hasRestaurant: true, slug };
     });
   }, []);
 

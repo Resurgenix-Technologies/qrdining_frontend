@@ -1,20 +1,13 @@
-import { useState } from "react";
+﻿import { useEffect, useState } from "react";
+
+import { CHATBOT_CRAVING_TAGS } from "../constants";
 
 export default function BadgesVariant({ selected, onChange }) {
     const [localSelected, setLocalSelected] = useState(selected || []);
 
-    const cravingsList = [
-        "Spicy",
-        "Sweet",
-        "Light",
-        "Heavy",
-        "Drinks",
-        "Snacks",
-        "Diabetic",
-        "Niramish",
-        "Halal",
-        "Vegan",
-    ];
+    useEffect(() => {
+        setLocalSelected(selected || []);
+    }, [selected]);
 
     const toggleCraving = (craving) => {
         let newSelected;
@@ -28,17 +21,17 @@ export default function BadgesVariant({ selected, onChange }) {
     };
 
     return (
-        <div className="flex flex-wrap gap-2 pt-2">
-            {cravingsList.map((craving) => {
+        <div className="flex flex-wrap gap-2 pt-1">
+            {CHATBOT_CRAVING_TAGS.map((craving) => {
                 const isSelected = localSelected.includes(craving);
                 return (
                     <button
                         key={craving}
                         onClick={() => toggleCraving(craving)}
-                        className={`px-5 py-2 text-xs font-bold tracking-widest uppercase rounded-full border transition-all ${
+                        className={`rounded-full border px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] transition-all sm:px-3.5 ${
                             isSelected
-                                ? "bg-black text-white border-black shadow-sm"
-                                : "bg-white border-gray-300 hover:border-gray-400 text-gray-700 hover:bg-gray-50"
+                                ? "border-black bg-black text-white"
+                                : "border-[#ddd5ca] bg-white text-[#6d655c] hover:bg-[#f5efe7]"
                         }`}
                     >
                         {craving}

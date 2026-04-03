@@ -9,14 +9,20 @@ export default function OrdersTab({
   customDate,
   filterStatus,
   STATUS_CONFIG,
-  
   setIsSidebarOpen,
   toggleAcceptingOrders,
   setDateFilter,
   setCustomDate,
   setFilterStatus,
-  handleStatusUpdate
+  handleOrderAction
 }) {
+  const statusFilters = [
+    { value: 'all', label: 'all' },
+    { value: 'preparing', label: 'preparing' },
+    { value: 'done_pending_verification', label: 'done pending verification' },
+    { value: 'completed', label: 'completed' },
+  ];
+
   return (
     <div className="animate-fade-in">
       <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 mb-4">
@@ -66,9 +72,9 @@ export default function OrdersTab({
             )}
           </div>
           <div className="flex bg-white border border-border rounded-lg shadow-sm p-0.5 overflow-x-auto w-full sm:w-auto hide-scrollbar">
-            {['all', 'new', 'preparing', 'ready', 'completed'].map(status => (
-              <button key={status} onClick={() => setFilterStatus(status)} className={`px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest transition rounded flex-1 sm:flex-none whitespace-nowrap ${filterStatus === status ? 'bg-black text-white shadow' : 'hover:bg-gray-50 text-gray-400'}`}>
-                {status}
+            {statusFilters.map(({ value, label }) => (
+              <button key={value} onClick={() => setFilterStatus(value)} className={`px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest transition rounded flex-1 sm:flex-none whitespace-nowrap ${filterStatus === value ? 'bg-black text-white shadow' : 'hover:bg-gray-50 text-gray-400'}`}>
+                {label}
               </button>
             ))}
           </div>
@@ -83,8 +89,13 @@ export default function OrdersTab({
           </div>
         )}
         {filteredOrders.map(order => {
-          const status = order.orderStatus || 'new';
-          const cfg = STATUS_CONFIG[status];
+          const status = order.orderStatus || 'preparing';
+          const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.preparing;
+          const actionLabel = status === 'preparing'
+            ? 'Done'
+            : status === 'done_pending_verification'
+              ? 'Verify PIN'
+              : '';
           return (
             <div key={order._id} className="bg-white border border-border rounded-xl p-4 relative overflow-hidden shadow-sm hover:shadow-md transition-shadow">
               <div className={`absolute top-0 left-0 w-[5px] h-full ${cfg.badge.split(' ')[0]}`} />
@@ -121,9 +132,9 @@ export default function OrdersTab({
                 ))}
               </div>
 
-              {cfg.next && (
-                <button onClick={() => handleStatusUpdate(order._id, status)} className="w-full bg-black text-white h-[42px] font-black text-[10px] uppercase tracking-[0.2em] hover:bg-gray-800 transition flex items-center justify-center gap-2 rounded-[14px]">
-                  {STATUS_CONFIG[cfg.next].label} <ArrowRight className="w-3 h-3" />
+              {actionLabel && (
+                <button onClick={() => handleOrderAction(order)} disabled={actionLoading} className="w-full bg-black text-white h-[42px] font-black text-[10px] uppercase tracking-[0.2em] hover:bg-gray-800 transition flex items-center justify-center gap-2 rounded-[14px] disabled:opacity-60">
+                  {actionLabel} <ArrowRight className="w-3 h-3" />
                 </button>
               )}
             </div>

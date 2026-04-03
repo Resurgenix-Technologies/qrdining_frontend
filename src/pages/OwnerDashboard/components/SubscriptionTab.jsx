@@ -401,22 +401,19 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
   // ── Verify payment on return from Cashfree ────────────────────────────────
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const cashfreeOrderId = params.get('verifySubPaymentId')
-      ? `qrdine_sub_${params.get('verifySubPaymentId')}` : null;
-    const planId = params.get('planId');
+    const checkoutId = params.get('subCheckout');
 
-    if (!cashfreeOrderId || !planId) return;
+    if (!checkoutId) return;
 
     // Clean URL
     const clean = new URL(window.location.href);
-    clean.searchParams.delete('verifySubPaymentId');
-    clean.searchParams.delete('planId');
+    clean.searchParams.delete('subCheckout');
     window.history.replaceState({}, '', clean.toString());
 
     const verify = async () => {
       setVerifyingPayment(true);
       try {
-        const result = await subscriptionApi.verifyPaymentOrder(cashfreeOrderId, planId);
+        const result = await subscriptionApi.verifyPaymentOrder(checkoutId);
         if (result.status === 'paid') {
           setSubscription(result.subscription);
           const newHistory = await subscriptionApi.getHistory().catch(() => []);
@@ -458,7 +455,7 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
       const returnUrl = `${window.location.origin}${window.location.pathname}?tab=subscription`;
       const res = await subscriptionApi.createPaymentOrder(plan._id, returnUrl);
 
-      if (!res.paymentSessionId) {
+      if (!res.paymentSessionId || !res.checkoutId) {
         throw new Error('Failed to get payment session from gateway.');
       }
 
@@ -480,7 +477,7 @@ export default function SubscriptionTab({ restaurant, setIsSidebarOpen, setActiv
       const maxAttempts = 4;
       
       while (attempts < maxAttempts) {
-        verifyRes = await subscriptionApi.verifyPaymentOrder(res.cashfreeOrderId, plan._id);
+        verifyRes = await subscriptionApi.verifyPaymentOrder(res.checkoutId);
         if (verifyRes.status === 'paid' || verifyRes.status === 'failed') {
           break;
         }

@@ -1,22 +1,20 @@
-export default function DietFilters({ menu, categoryItems, dietFilter, setDietFilter }) {
+﻿export default function DietFilters({ menu, categoryItems, dietFilter, setDietFilter }) {
   if (!menu || menu.length === 0 || !categoryItems || categoryItems.length === 0) return null;
 
   return (
-    <div className="bg-gray-50 border-b border-border z-30 flex-shrink-0">
-      <div className="max-w-2xl mx-auto px-4 py-2 flex items-center gap-3 overflow-x-auto hide-scrollbar">
-        {['all', 'veg', 'non-veg', 'vegan'].map((type) => (
-          <button
-            key={type}
-            onClick={() => setDietFilter(type)}
-            className={`flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold uppercase tracking-widest border transition-colors rounded ${dietFilter === type ? 'bg-black text-white border-black' : 'bg-white text-muted border-border hover:bg-gray-100'}`}
-          >
-            {type === 'veg' && <span className="w-2 h-2 rounded-full bg-green-500" />}
-            {type === 'non-veg' && <span className="w-2 h-2 rounded-full bg-red-500" />}
-            {type === 'vegan' && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
-            {type}
-          </button>
-        ))}
-      </div>
+    <div className="scroll-strip hide-scrollbar mt-3 -mx-1 flex items-center gap-2 overflow-x-auto px-1">
+      {['all', 'veg', 'non-veg', 'vegan'].map((type) => (
+        <button
+          key={type}
+          onClick={() => setDietFilter(type)}
+          className={`flex shrink-0 items-center gap-2 whitespace-nowrap border px-3 py-2 text-[9px] font-semibold uppercase tracking-[0.22em] transition ${dietFilter === type ? 'border-black bg-black text-white' : 'border-[#d2c5b6] bg-white text-[#554a3f] hover:bg-[#f2e9de]'}`}
+        >
+          {type === 'veg' && <span className="h-2 w-2 rounded-full bg-green-500" />}
+          {type === 'non-veg' && <span className="h-2 w-2 rounded-full bg-rose-500" />}
+          {type === 'vegan' && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
+          {type}
+        </button>
+      ))}
     </div>
   );
 }

@@ -5,6 +5,8 @@ import './index.css'
 import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import SplashLoader from './components/SplashLoader'
+import ErrorBoundary from './components/errors/ErrorBoundary'
+import { ToastProvider } from './components/ui/ToastProvider'
 
 function Root() {
   // Skip splash on customer QR routes for instant menu load
@@ -15,10 +17,14 @@ function Root() {
   return (
     <React.StrictMode>
       <BrowserRouter>
-        <AuthProvider>
-          {showSplash && <SplashLoader onComplete={handleSplashComplete} />}
-          <App />
-        </AuthProvider>
+        <ErrorBoundary>
+          <ToastProvider>
+            <AuthProvider>
+              {showSplash && <SplashLoader onComplete={handleSplashComplete} />}
+              <App />
+            </AuthProvider>
+          </ToastProvider>
+        </ErrorBoundary>
       </BrowserRouter>
     </React.StrictMode>
   );

@@ -1,26 +1,24 @@
-export default function CategoryTabs({ menu, activeCategory, setActiveCategory }) {
+﻿export default function CategoryTabs({ menu, activeCategory, setActiveCategory }) {
   if (!menu || menu.length === 0) return null;
-  
+
   return (
-    <div className="border-b border-border sticky top-0 bg-white z-40 flex-shrink-0">
-      <div className="max-w-2xl mx-auto px-4">
-        <div className="flex gap-0.5 overflow-x-auto hide-scrollbar py-2">
+    <div className="border border-[#d2c5b6] bg-white px-3 py-2.5">
+      <div className="scroll-strip hide-scrollbar -mx-1 flex gap-2 overflow-x-auto px-1">
+        <button
+          onClick={() => setActiveCategory('all')}
+          className={`shrink-0 border px-3 py-2 text-[9px] font-semibold uppercase tracking-[0.22em] transition ${activeCategory === 'all' ? 'border-black bg-black text-white' : 'border-[#d2c5b6] bg-white text-[#554a3f] hover:bg-[#f2e9de]'}`}
+        >
+          All
+        </button>
+        {menu.map((cat) => (
           <button
-            onClick={() => setActiveCategory('all')}
-            className={`px-3 py-1.5 text-[10px] font-bold tracking-widest uppercase whitespace-nowrap transition-colors ${activeCategory === 'all' ? 'bg-black text-white' : 'text-muted hover:text-black'}`}
+            key={cat.id}
+            onClick={() => setActiveCategory(cat.id)}
+            className={`shrink-0 whitespace-nowrap border px-3 py-2 text-[9px] font-semibold uppercase tracking-[0.22em] transition ${activeCategory === cat.id ? 'border-black bg-black text-white' : 'border-[#d2c5b6] bg-white text-[#554a3f] hover:bg-[#f2e9de]'}`}
           >
-            All
+            {cat.name}
           </button>
-          {menu.map(cat => (
-            <button
-              key={cat._id}
-              onClick={() => setActiveCategory(cat._id)}
-              className={`px-3 py-1.5 text-[10px] font-bold tracking-widest uppercase whitespace-nowrap transition-colors ${activeCategory === cat._id ? 'bg-black text-white' : 'text-muted hover:text-black'}`}
-            >
-              {cat.name}
-            </button>
-          ))}
-        </div>
+        ))}
       </div>
     </div>
   );

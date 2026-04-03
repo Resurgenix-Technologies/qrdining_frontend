@@ -1,9 +1,9 @@
-import { useRef, useEffect } from "react";
+﻿import { useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import SentMessage from "./SentMessage";
 import ReceivedMessage from "./ReceivedMessage";
 
-export default function ChatWindow({ messages, currentOrder }) {
+export default function ChatWindow({ messages, currentOrder, children }) {
     const scrollRef = useRef(null);
 
     useEffect(() => {
@@ -11,17 +11,17 @@ export default function ChatWindow({ messages, currentOrder }) {
             top: scrollRef.current.scrollHeight,
             behavior: "smooth",
         });
-    }, [messages]);
+    }, [messages, children]);
 
     return (
         <div
             ref={scrollRef}
-            className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6 bg-white w-full overflow-x-hidden min-w-0"
+            className="flex-1 min-w-0 w-full overflow-x-hidden overflow-y-auto space-y-4 px-3 py-4 sm:px-4 sm:py-5"
         >
             <AnimatePresence>
                 {messages.map((msg, i) => (
                     <motion.div
-                        key={i}
+                        key={msg.id || i}
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ duration: 0.3 }}
@@ -31,12 +31,13 @@ export default function ChatWindow({ messages, currentOrder }) {
                             <SentMessage text={msg.text} />
                         ) : (
                             <ReceivedMessage text={msg.text}>
-                                {typeof msg.component === 'function' ? msg.component(currentOrder) : msg.component}
+                                {typeof msg.component === "function" ? msg.component(currentOrder) : msg.component}
                             </ReceivedMessage>
                         )}
                     </motion.div>
                 ))}
             </AnimatePresence>
+            {children}
         </div>
     );
 }

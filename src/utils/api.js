@@ -1,48 +1,64 @@
-// ─── Centralized API Client ───
+﻿// Centralized API Client
 // All communication with the backend goes through this module.
 
-const BASE_URL = import.meta.env.VITE_API_URL || '/api';
-const AUTH_TOKEN_KEY = 'qr_dining_auth_token';
+const appEnv = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {};
+const BASE_URL = appEnv.VITE_API_URL || '/api';
+const REQUEST_TIMEOUT_MS = Number(appEnv.VITE_API_TIMEOUT_MS || 15000);
 const inflightGetRequests = new Map();
+const CSRF_COOKIE_NAME = 'csrf_token';
 
-export const authTokenStore = {
-  get() {
-    if (typeof window === 'undefined') return '';
-    return window.localStorage.getItem(AUTH_TOKEN_KEY) || '';
-  },
-  set(token) {
-    if (typeof window === 'undefined') return;
-    if (token) {
-      window.localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } else {
-      window.localStorage.removeItem(AUTH_TOKEN_KEY);
-    }
-  },
-  clear() {
-    if (typeof window === 'undefined') return;
-    window.localStorage.removeItem(AUTH_TOKEN_KEY);
-  },
+export class ApiError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = options.status || 0;
+    this.code = options.code || '';
+    this.details = options.details || null;
+    this.userMessage = options.userMessage || message;
+    this.isNetworkError = Boolean(options.isNetworkError);
+    this.isTimeout = Boolean(options.isTimeout);
+    this.canRetry =
+      options.canRetry ??
+      (this.isNetworkError || this.isTimeout || this.status >= 500);
+  }
+}
+
+const getCookieValue = (name) => {
+  if (typeof document === 'undefined') return '';
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=([^;]*)`),
+  );
+  return match ? decodeURIComponent(match[1]) : '';
 };
 
-/**
- * Core fetch wrapper with credentials (cookies) support.
- */
+function createNetworkError(message, options = {}) {
+  return new ApiError(message, {
+    isNetworkError: true,
+    canRetry: true,
+    ...options,
+  });
+}
+
 async function request(method, path, data = null, isFormData = false) {
-  const isMultipartPayload = isFormData || (typeof FormData !== 'undefined' && data instanceof FormData);
+  const isMultipartPayload =
+    isFormData || (typeof FormData !== 'undefined' && data instanceof FormData);
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+
   const options = {
     method,
-    credentials: 'include', // Send cookies (JWT)
+    credentials: 'include',
     headers: {},
+    signal: controller?.signal,
   };
 
-  const authToken = authTokenStore.get();
-  if (authToken) {
-    options.headers.Authorization = `Bearer ${authToken}`;
+  const csrfToken = getCookieValue(CSRF_COOKIE_NAME);
+  if (csrfToken && !['GET', 'HEAD'].includes(method.toUpperCase())) {
+    options.headers['X-CSRF-Token'] = csrfToken;
   }
 
   if (data) {
     if (isMultipartPayload) {
-      options.body = data; // FormData, let browser set content-type
+      options.body = data;
     } else {
       options.headers['Content-Type'] = 'application/json';
       options.body = JSON.stringify(data);
@@ -50,26 +66,63 @@ async function request(method, path, data = null, isFormData = false) {
   }
 
   const url = `${BASE_URL}${path}`;
-  const requestKey = method === 'GET'
-    ? JSON.stringify({ method, url, authToken })
-    : null;
+  const requestKey = method === 'GET' ? JSON.stringify({ method, url }) : null;
 
   if (requestKey && inflightGetRequests.has(requestKey)) {
     return inflightGetRequests.get(requestKey);
   }
 
   const executeRequest = async () => {
-    const response = await fetch(url, options);
-    const contentType = response.headers.get('content-type') || '';
-    const json = contentType.includes('application/json')
-      ? await response.json().catch(() => ({}))
-      : {};
+    let timeoutId;
 
-    if (!response.ok) {
-      throw new Error(json.message || `Request failed with status ${response.status}`);
+    try {
+      if (controller && typeof window !== 'undefined') {
+        timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      }
+
+      const response = await fetch(url, options);
+      const contentType = response.headers.get('content-type') || '';
+      const json = contentType.includes('application/json')
+        ? await response.json().catch(() => ({}))
+        : {};
+
+      if (!response.ok) {
+        throw new ApiError(json.message || `Request failed with status ${response.status}`, {
+          status: response.status,
+          code: json.code || '',
+          details: json,
+          userMessage:
+            json.message ||
+            (response.status >= 500
+              ? 'The server hit a problem. Please try again.'
+              : 'We could not complete that request.'),
+        });
+      }
+
+      return json;
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw createNetworkError('The request took too long to complete.', {
+          isTimeout: true,
+          userMessage: 'The request timed out. Please try again.',
+        });
+      }
+
+      if (error instanceof ApiError) {
+        throw error;
+      }
+
+      throw createNetworkError('Unable to reach the server.', {
+        userMessage:
+          typeof navigator !== 'undefined' && navigator.onLine === false
+            ? 'No internet connection. Check your network and try again.'
+            : 'Network issue detected. Please try again.',
+      });
+    } finally {
+      if (timeoutId && typeof window !== 'undefined') {
+        window.clearTimeout(timeoutId);
+      }
     }
-
-    return json;
   };
 
   const requestPromise = executeRequest();
@@ -86,42 +139,35 @@ async function request(method, path, data = null, isFormData = false) {
   return requestPromise;
 }
 
-// ─── Convenience Methods ───
 const get = (path) => request('GET', path);
 const post = (path, data, isFormData = false) => request('POST', path, data, isFormData);
 const put = (path, data, isFormData = false) => request('PUT', path, data, isFormData);
 const patch = (path, data) => request('PATCH', path, data);
 const del = (path) => request('DELETE', path);
 
-// ─── Auth API ───
 export const authApi = {
   login: (email, password) => post('/auth/restaurant/login', { email, password }),
   adminLogin: (email, password) => post('/auth/admin/login', { email, password }),
-  // Legacy single-step registration (kept for compatibility)
   register: (ownerName, email, password, name) => post('/auth/register', { ownerName, email, password, name }),
-  // Two-step OTP registration
   initiateRegister: (ownerName, email, password, name) =>
     post('/auth/register/initiate', { ownerName, email, password, name }),
-  verifyRegister: (email, otp) =>
-    post('/auth/register/verify', { email, otp }),
+  verifyRegister: (email, otp) => post('/auth/register/verify', { email, otp }),
   logout: () => post('/auth/logout'),
   me: () => get('/auth/me'),
 };
 
-// ─── Public Menu API (no auth required) ───
 export const publicApi = {
   getMenu: (slug) => get(`/public/menu/${slug}`),
-  validateTable: (slug, tableNumber) => get(`/public/table/${slug}/${tableNumber}`),
-  placeOrder: (orderData) => post('/public/place-order', orderData),
-  getSessionOrders: (sessionId) => get(`/public/orders/session/${sessionId}`),
+  getContext: (slug, qrToken) => get(`/public/context/${slug}/${qrToken}`),
+  getRecommendations: (payload) => post('/public/recommendations', payload),
+  getSessionOrders: () => get('/public/orders/session'),
 };
 
 export const paymentsApi = {
   createOrder: (orderData) => post('/payments/create-order', orderData),
-  verifyOrder: (orderId) => post('/payments/verify-order', { orderId }),
+  verifyOrder: (orderRef) => post('/payments/verify-order', { orderRef }),
 };
 
-// ─── Restaurant Profile API ───
 export const restaurantApi = {
   getProfile: () => get('/restaurant/profile'),
   updateProfile: (data) => put('/restaurant/profile', data, data instanceof FormData),
@@ -137,30 +183,22 @@ export const restaurantApi = {
   },
   changePassword: (currentPassword, newPassword) =>
     put('/restaurant/change-password', { currentPassword, newPassword }),
-  requestEmailChangeOtp: (newEmail) => 
-    post('/restaurant/change-email/request-otp', { newEmail }),
-  verifyEmailChangeOtp: (newEmail, otp) => 
-    post('/restaurant/change-email/verify-otp', { newEmail, otp }),
+  requestEmailChangeOtp: (newEmail) => post('/restaurant/change-email/request-otp', { newEmail }),
+  verifyEmailChangeOtp: (newEmail, otp) => post('/restaurant/change-email/verify-otp', { newEmail, otp }),
   getAnalytics: () => get('/restaurant/analytics'),
   getPayouts: () => get('/restaurant/payouts'),
   updateOperatingHours: (operatingHours) => put('/restaurant/operating-hours', { operatingHours }),
 };
 
-
-// ─── Menu API ───
 export const menuApi = {
-  // Categories
   getCategories: () => get('/menu/categories'),
   createCategory: (name) => post('/menu/categories', { name }),
   updateCategory: (id, data) => put(`/menu/categories/${id}`, data),
   deleteCategory: (id) => del(`/menu/categories/${id}`),
   toggleCategory: (id) => patch(`/menu/categories/${id}/toggle`),
   reorderCategories: (orderedIds) => put('/menu/categories-reorder', { orderedIds }),
-
-  // Items
   getItems: (categoryId) => get(`/menu/items${categoryId ? `?categoryId=${categoryId}` : ''}`),
   createItem: (data) => {
-    // Supports both JSON and FormData (when image file is provided)
     if (data instanceof FormData) return post('/menu/items', data, true);
     return post('/menu/items', data);
   },
@@ -173,7 +211,6 @@ export const menuApi = {
   reorderItems: (orderedIds) => put('/menu/items-reorder', { orderedIds }),
 };
 
-// ─── Tables API ───
 export const tablesApi = {
   getTables: () => get('/tables'),
   createTable: (tableName, tableNumber) => post('/tables', { tableName, tableNumber }),
@@ -185,7 +222,6 @@ export const tablesApi = {
   regenerateQR: (id) => patch(`/tables/${id}/regenerate-qr`),
 };
 
-// ─── Orders API (restaurant owner) ───
 export const ordersApi = {
   getOrders: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
@@ -196,10 +232,10 @@ export const ordersApi = {
   getDailyEarnings: () => get('/orders/daily-earnings'),
   getDailyEarningsSummary: () => get('/orders/daily-earnings-summary'),
   updateStatus: (id, status) => patch(`/orders/${id}/status`, { status }),
+  verifyPin: (id, pin) => post(`/orders/${id}/verify-pin`, { pin }),
+  resendPin: (id) => post(`/orders/${id}/resend-pin`),
 };
 
-
-// ─── Admin API ───
 export const adminApi = {
   getDashboard: () => get('/admin/dashboard'),
   getRestaurants: (params = {}) => {
@@ -223,7 +259,6 @@ export const adminApi = {
   getSubscriptions: () => get('/admin/subscriptions'),
   grantSubscription: (data) => post('/admin/subscriptions/grant', data),
   getSettings: () => get('/admin/settings'),
-  
   getPayouts: () => get('/admin/payouts'),
   createPayout: (data) => post('/admin/payouts', data),
   updatePayout: (id, data) => put(`/admin/payouts/${id}`, data),
@@ -232,7 +267,6 @@ export const adminApi = {
   quickSendPayout: (data) => post('/admin/payouts/quick-send', data),
 };
 
-// ─── Coupons API ───
 export const couponsApi = {
   getCoupons: () => get('/coupons'),
   createCoupon: (data) => post('/coupons', data),
@@ -240,12 +274,11 @@ export const couponsApi = {
   deleteCoupon: (id) => del(`/coupons/${id}`),
 };
 
-// ─── Subscription API ───
 export const subscriptionApi = {
   getSubscription: () => get('/restaurant/subscription'),
   getHistory: () => get('/restaurant/subscription/history'),
   getPlans: () => get('/restaurant/plans'),
   cancelSubscription: () => post('/restaurant/subscription/cancel'),
   createPaymentOrder: (planId, returnUrl) => post('/sub-payments/create-order', { planId, returnUrl }),
-  verifyPaymentOrder: (cashfreeOrderId, planId) => post('/sub-payments/verify-order', { cashfreeOrderId, planId }),
+  verifyPaymentOrder: (checkoutId) => post('/sub-payments/verify-order', { checkoutId }),
 };

@@ -2,6 +2,11 @@ const CASHFREE_SDK_URL = 'https://sdk.cashfree.com/js/v3/cashfree.js';
 
 let cashfreeScriptPromise = null;
 
+const isMobileViewport = () => {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(max-width: 768px)').matches || window.innerWidth <= 768;
+};
+
 const loadCashfreeSdk = () => {
   if (typeof window === 'undefined') {
     return Promise.reject(new Error('Cashfree checkout is only available in the browser.'));
@@ -32,7 +37,7 @@ const loadCashfreeSdk = () => {
   return cashfreeScriptPromise;
 };
 
-export const openCashfreeCheckout = async ({ paymentSessionId, mode }) => {
+export const openCashfreeCheckout = async ({ paymentSessionId, mode, preferRedirect = false }) => {
   const Cashfree = await loadCashfreeSdk();
   if (typeof Cashfree !== 'function') {
     throw new Error('Cashfree SDK is unavailable.');
@@ -42,8 +47,19 @@ export const openCashfreeCheckout = async ({ paymentSessionId, mode }) => {
     mode: mode === 'production' ? 'production' : 'sandbox',
   });
 
-  return cashfree.checkout({
+  const redirectTarget = preferRedirect || isMobileViewport() ? '_self' : '_modal';
+
+  const result = await cashfree.checkout({
     paymentSessionId,
-    redirectTarget: '_modal',
+    redirectTarget,
   });
+
+  if (result?.error && redirectTarget === '_modal') {
+    return cashfree.checkout({
+      paymentSessionId,
+      redirectTarget: '_self',
+    });
+  }
+
+  return result;
 };

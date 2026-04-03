@@ -11,6 +11,8 @@ import PaymentsTab from './components/PaymentsTab';
 import SettingsTab from './components/SettingsTab';
 import TablesTab from './components/TablesTab';
 import SubscriptionTab from './components/SubscriptionTab';
+import Modal from '../../components/ui/Modal';
+import { CHATBOT_CRAVING_TAGS, normalizeChatbotTags } from '../chat/constants';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingBag, Utensils, Grid3x3, BarChart3, Plus, Trash2, Eye, EyeOff,
@@ -32,17 +34,37 @@ const TABS = [
 ];
 
 const STATUS_CONFIG = {
-  new: { label: 'New', icon: Clock, next: 'preparing', bg: 'bg-blue-50 border-blue-200', badge: 'bg-blue-100 text-blue-700', dot: 'bg-blue-500' },
-  preparing: { label: 'Preparing', icon: ChefHat, next: 'ready', bg: 'bg-amber-50 border-amber-200', badge: 'bg-amber-100 text-amber-700', dot: 'bg-amber-500' },
-  ready: { label: 'Ready', icon: Package, next: 'completed', bg: 'bg-green-50 border-green-200', badge: 'bg-green-100 text-green-700', dot: 'bg-green-500' },
-  completed: { label: 'Done', icon: CheckCircle, next: null, bg: 'bg-gray-50 border-gray-200', badge: 'bg-gray-100 text-gray-600', dot: 'bg-gray-400' },
+  preparing: { label: 'Preparing', icon: ChefHat, bg: 'bg-amber-50 border-amber-200', badge: 'bg-amber-100 text-amber-700', dot: 'bg-amber-500' },
+  done_pending_verification: { label: 'Done (Pending Verification)', icon: Package, bg: 'bg-blue-50 border-blue-200', badge: 'bg-blue-100 text-blue-700', dot: 'bg-blue-500' },
+  completed: { label: 'Completed', icon: CheckCircle, bg: 'bg-gray-50 border-gray-200', badge: 'bg-gray-100 text-gray-600', dot: 'bg-gray-400' },
+};
+
+const normalizeOrderStatus = (status) => {
+  if (status === 'new') return 'preparing';
+  if (status === 'ready') return 'done_pending_verification';
+  return status || 'preparing';
+};
+
+const normalizeOrderForUi = (order) => ({
+  ...order,
+  orderStatus: normalizeOrderStatus(order?.orderStatus),
+});
+
+const EMPTY_MENU_ITEM = {
+  name: '',
+  price: '',
+  categoryId: '',
+  description: '',
+  dietType: 'veg',
+  tags: [],
+  imageFile: null,
 };
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 export default function OwnerDashboard() {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { currentUser, logout } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'orders';
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -94,11 +116,17 @@ export default function OwnerDashboard() {
 
   const [newCategory, setNewCategory] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState(null);
-  const [newItem, setNewItem] = useState({ name: '', price: '', categoryId: '', description: '', dietType: 'veg', imageFile: null });
+  const [newItem, setNewItem] = useState(EMPTY_MENU_ITEM);
   const [editingItemId, setEditingItemId] = useState(null);
   const [addTableCount, setAddTableCount] = useState(1);
   const [actionLoading, setActionLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState('all');
+  const [pinModalOrder, setPinModalOrder] = useState(null);
+  const [pinValue, setPinValue] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [pinNotice, setPinNotice] = useState('');
+  const [pinSubmitting, setPinSubmitting] = useState(false);
+  const [pinResending, setPinResending] = useState(false);
 
   const [dateFilter, setDateFilter] = useState('today');
   const [customDate, setCustomDate] = useState('');
@@ -179,7 +207,7 @@ export default function OwnerDashboard() {
 
   const applyProfileState = useCallback((profile) => {
     setRestaurant(profile);
-    setIsAcceptingOrders(profile?.isAcceptingOrders !== false);
+    setIsAcceptingOrders(profile?.restaurantIsOpen !== false && profile?.isAcceptingOrders !== false);
 
     if (profile?.operatingHours) {
       const oh = profile.operatingHours;
@@ -269,7 +297,7 @@ export default function OwnerDashboard() {
     let hasSuccess = false;
 
     if (ordersResult.status === 'fulfilled') {
-      setOrders(ordersResult.value.orders || []);
+      setOrders((ordersResult.value.orders || []).map(normalizeOrderForUi));
       hasSuccess = true;
     }
 
@@ -359,24 +387,25 @@ export default function OwnerDashboard() {
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
     socket.on('new-order', (order) => {
+      const normalizedOrder = normalizeOrderForUi(order);
       if (dateFilterRef.current === 'today') {
-        setOrders(prev => [order, ...prev]);
+        setOrders(prev => [normalizedOrder, ...prev]);
       }
       setNewOrders(n => n + 1);
 
       // Show animated popup notification
       const notifId = `notif-${Date.now()}`;
-      const itemCount = (order.items || []).reduce((s, i) => s + (i.quantity || 1), 0);
-      const label = order.orderType === 'Takeaway'
+      const itemCount = (normalizedOrder.items || []).reduce((s, i) => s + (i.quantity || 1), 0);
+      const label = normalizedOrder.orderType === 'Takeaway'
         ? 'Takeaway'
-        : order.tableNumber ? `Table ${order.tableNumber}` : 'Dine-In';
+        : normalizedOrder.tableNumber ? `Table ${normalizedOrder.tableNumber}` : 'Dine-In';
       const notif = {
         id: notifId,
         label,
-        customerName: order.customerName || 'Guest',
+        customerName: normalizedOrder.customerName || 'Guest',
         itemCount,
-        totalAmount: order.totalAmount,
-        items: (order.items || []).slice(0, 3),
+        totalAmount: normalizedOrder.totalAmount,
+        items: (normalizedOrder.items || []).slice(0, 3),
         createdAt: new Date(),
       };
       setOrderNotifications(prev => [notif, ...prev].slice(0, 5));
@@ -389,7 +418,21 @@ export default function OwnerDashboard() {
       }, 12000);
     });
     socket.on('order-updated', ({ orderId, status }) => {
-      setOrders(prev => prev.map(o => (o._id === orderId || o.id === orderId) ? { ...o, orderStatus: status } : o));
+      const normalizedStatus = normalizeOrderStatus(status);
+      setOrders(prev => prev.map(o => (o._id === orderId || o.id === orderId) ? { ...o, orderStatus: normalizedStatus } : o));
+      if (normalizedStatus === 'completed') {
+        setPinValue('');
+        setPinError('');
+        setPinNotice('');
+      }
+      setPinModalOrder((prev) => {
+        if (!prev || (prev._id !== orderId && prev.id !== orderId)) {
+          return prev;
+        }
+        return normalizedStatus === 'completed'
+          ? null
+          : { ...prev, orderStatus: normalizedStatus };
+      });
     });
     return () => {
       socket.disconnect();
@@ -499,24 +542,103 @@ export default function OwnerDashboard() {
 
   const handleLogout = async () => { await logout(); navigate('/owner-login'); };
 
+  const closePinModal = useCallback(() => {
+    if (pinSubmitting || pinResending) return;
+    setPinModalOrder(null);
+    setPinValue('');
+    setPinError('');
+    setPinNotice('');
+  }, [pinResending, pinSubmitting]);
+
+  const openPinModal = useCallback((order) => {
+    setPinModalOrder(normalizeOrderForUi(order));
+    setPinValue('');
+    setPinError('');
+    setPinNotice('');
+  }, []);
+
   const toggleAcceptingOrders = async () => {
     setActionLoading(true);
     try {
       const newVal = !isAcceptingOrders;
-      await restaurantApi.updateProfile({ isAcceptingOrders: newVal });
+      await restaurantApi.updateProfile({ isAcceptingOrders: newVal, restaurantIsOpen: newVal });
       setIsAcceptingOrders(newVal);
-      setRestaurant(prev => ({ ...prev, isAcceptingOrders: newVal }));
+      setRestaurant(prev => ({ ...prev, isAcceptingOrders: newVal, restaurantIsOpen: newVal }));
     } catch (err) { alert('Failed to update status'); }
     finally { setActionLoading(false); }
   };
 
-  const handleStatusUpdate = async (orderId, currentStatus) => {
-    const nextStatus = STATUS_CONFIG[currentStatus]?.next;
-    if (!nextStatus) return;
+  const handleOrderAction = async (order) => {
+    const currentStatus = normalizeOrderStatus(order?.orderStatus);
+
+    if (currentStatus === 'preparing') {
+      setActionLoading(true);
+      try {
+        const response = await ordersApi.updateStatus(order._id, 'done_pending_verification');
+        const updatedOrder = normalizeOrderForUi(response.order || { ...order, orderStatus: 'done_pending_verification' });
+        setOrders(prev => prev.map((entry) => entry._id === order._id ? updatedOrder : entry));
+        openPinModal(updatedOrder);
+      } catch (err) {
+        alert(err.message || 'Failed to move order to PIN verification.');
+      } finally {
+        setActionLoading(false);
+      }
+      return;
+    }
+
+    if (currentStatus === 'done_pending_verification') {
+      openPinModal(order);
+    }
+  };
+
+  const handleVerifyPin = async () => {
+    if (!pinModalOrder?._id) return;
+
+    setPinSubmitting(true);
+    setPinError('');
+    setPinNotice('');
     try {
-      await ordersApi.updateStatus(orderId, nextStatus);
-      setOrders(prev => prev.map(o => o._id === orderId ? { ...o, orderStatus: nextStatus } : o));
-    } catch (err) { alert('Failed to update order'); }
+      const response = await ordersApi.verifyPin(pinModalOrder._id, pinValue);
+      const updatedOrder = normalizeOrderForUi(response.order);
+      setOrders(prev => prev.map((entry) => entry._id === updatedOrder._id ? updatedOrder : entry));
+      setPinModalOrder(updatedOrder);
+      setPinNotice('PIN verified. Invoice email is being sent to the customer.');
+      setPinValue('');
+      window.setTimeout(() => {
+        setPinModalOrder(null);
+        setPinNotice('');
+      }, 900);
+    } catch (err) {
+      const responseMessage = err?.details?.message || err?.message || 'Incorrect PIN. Please try again.';
+      setPinError(responseMessage);
+      if (err?.details?.order) {
+        setPinModalOrder(normalizeOrderForUi(err.details.order));
+      }
+    } finally {
+      setPinSubmitting(false);
+    }
+  };
+
+  const handleResendPin = async () => {
+    if (!pinModalOrder?._id) return;
+
+    setPinResending(true);
+    setPinError('');
+    setPinNotice('');
+    try {
+      const response = await ordersApi.resendPin(pinModalOrder._id);
+      if (response.order) {
+        const updatedOrder = normalizeOrderForUi(response.order);
+        setOrders(prev => prev.map((entry) => entry._id === updatedOrder._id ? updatedOrder : entry));
+        setPinModalOrder(updatedOrder);
+      }
+      setPinNotice(response.message || 'A fresh PIN was emailed to the customer.');
+      setPinValue('');
+    } catch (err) {
+      setPinError(err?.details?.message || err?.message || 'Failed to resend PIN.');
+    } finally {
+      setPinResending(false);
+    }
   };
 
   const handleAddCategory = async () => {
@@ -545,10 +667,22 @@ export default function OwnerDashboard() {
     } catch (err) { alert(err.message); }
   };
 
+  const toggleItemTag = (tag) => {
+    setNewItem((prev) => {
+      const currentTags = normalizeChatbotTags(prev.tags || []);
+      const nextTags = currentTags.includes(tag)
+        ? currentTags.filter((entry) => entry !== tag)
+        : [...currentTags, tag];
+
+      return { ...prev, tags: nextTags };
+    });
+  };
+
   const handleAddItem = async () => {
     if (!newItem.name || !newItem.price || !newItem.categoryId) return;
     setActionLoading(true);
     try {
+      const normalizedTags = normalizeChatbotTags(newItem.tags || []);
       let payload;
       if (newItem.imageFile) {
         payload = new FormData();
@@ -557,6 +691,7 @@ export default function OwnerDashboard() {
         payload.append('categoryId', newItem.categoryId);
         payload.append('description', newItem.description || '');
         payload.append('dietType', newItem.dietType || 'veg');
+        payload.append('tags', normalizedTags.join(','));
         payload.append('image', newItem.imageFile);
       } else {
         payload = {
@@ -564,7 +699,8 @@ export default function OwnerDashboard() {
           price: parseFloat(newItem.price),
           categoryId: newItem.categoryId,
           description: newItem.description,
-          dietType: newItem.dietType
+          dietType: newItem.dietType,
+          tags: normalizedTags,
         };
       }
 
@@ -575,7 +711,7 @@ export default function OwnerDashboard() {
         const item = await menuApi.createItem(payload);
         setMenuItems(prev => [...prev, item]);
       }
-      setNewItem({ name: '', price: '', categoryId: '', description: '', dietType: 'veg', imageFile: null });
+      setNewItem(EMPTY_MENU_ITEM);
       setEditingItemId(null);
       setShowItemModal(false);
     } catch (err) { alert(err.message); }
@@ -1004,7 +1140,9 @@ export default function OwnerDashboard() {
     finally { setPwLoading(false); }
   };
 
-  const filteredOrders = filterStatus === 'all' ? orders : orders.filter(o => (o.orderStatus || 'new') === filterStatus);
+  const filteredOrders = filterStatus === 'all'
+    ? orders
+    : orders.filter((o) => normalizeOrderStatus(o.orderStatus) === filterStatus);
 
   const SidebarContent = () => (
     <>
@@ -1042,12 +1180,12 @@ export default function OwnerDashboard() {
         <div className="flex items-center justify-between gap-2 overflow-hidden">
           <div className="flex items-center gap-3 overflow-hidden">
             <div className="w-8 h-8 bg-black flex flex-shrink-0 items-center justify-center text-white font-black text-[10px] rounded-full">
-              {restaurant?.name?.charAt(0) || user?.email?.charAt(0)?.toUpperCase() || 'A'}
+              {restaurant?.name?.charAt(0) || currentUser?.email?.charAt(0)?.toUpperCase() || 'A'}
             </div>
             <div className="overflow-hidden">
               <p className="font-black text-[7px] uppercase tracking-widest text-muted opacity-60">PROPRIETOR</p>
               <p className="text-[10px] font-bold truncate leading-tight text-gray-900">{restaurant?.name || 'Restaurant'}</p>
-              {user?.email && <p className="text-[8px] truncate leading-tight text-gray-400">{user.email}</p>}
+              {currentUser?.email && <p className="text-[8px] truncate leading-tight text-gray-400">{currentUser.email}</p>}
             </div>
           </div>
           <button onClick={handleLogout} title="Log Out" className="p-1.5 flex-shrink-0 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md transition border border-transparent hover:border-red-100">
@@ -1200,7 +1338,7 @@ export default function OwnerDashboard() {
                     setDateFilter={setDateFilter}
                     setCustomDate={setCustomDate}
                     setFilterStatus={setFilterStatus}
-                    handleStatusUpdate={handleStatusUpdate}
+                    handleOrderAction={handleOrderAction}
                   />
                 )}
                 
@@ -1326,40 +1464,95 @@ export default function OwnerDashboard() {
         {showEmailModal && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowEmailModal(false)} className="absolute inset-0 bg-gray-900/30 backdrop-blur-sm" />
-            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative bg-white w-full max-w-sm p-6 rounded-xl shadow-2xl">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-base font-black tracking-tight uppercase flex items-center gap-2"><Lock size={18} /> Change Email</h3>
-                <button type="button" onClick={() => setShowEmailModal(false)} className="p-1 hover:bg-gray-100 transition rounded-md text-gray-400"><X size={18} /></button>
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="relative w-full max-w-md overflow-hidden border border-gray-200 bg-white shadow-2xl">
+              <div className="border-b border-gray-200 bg-[#fbfaf7] px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[9px] font-black uppercase tracking-[0.28em] text-gray-400">Account Email</p>
+                    <h3 className="mt-2 flex items-center gap-2 text-base font-black uppercase tracking-tight text-gray-950">
+                      <Lock size={18} />
+                      Change Email
+                    </h3>
+                    <p className="mt-2 max-w-xs text-xs leading-5 text-gray-500">
+                      Update your login email with a one-time verification code. Your current dashboard stays untouched until verification is complete.
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setShowEmailModal(false)} className="rounded-md border border-gray-200 p-2 text-gray-400 transition hover:bg-white hover:text-gray-700">
+                    <X size={18} />
+                  </button>
+                </div>
               </div>
 
-              {pwError && <div className="mb-4 p-2 bg-red-50 text-red-600 text-[9px] font-bold uppercase rounded">{pwError}</div>}
-              {pwSuccess && <div className="mb-4 p-2 bg-green-50 text-green-700 text-[9px] font-bold uppercase rounded">{pwSuccess}</div>}
+              <div className="px-6 py-5">
+                {pwError && <div className="mb-4 border border-red-200 bg-red-50 px-3 py-2 text-[9px] font-black uppercase tracking-[0.18em] text-red-600">{pwError}</div>}
+                {pwSuccess && <div className="mb-4 border border-green-200 bg-green-50 px-3 py-2 text-[9px] font-black uppercase tracking-[0.18em] text-green-700">{pwSuccess}</div>}
 
-              {emailModalMode === 'request' ? (
-                <form onSubmit={handleEmailChangeRequest} className="space-y-4">
-                  <p className="text-xs text-gray-500 mb-2">We will send an OTP to your new email to verify.</p>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">New Email Address</label>
-                    <input type="email" value={emailForm.newEmail} onChange={e => setEmailForm({ ...emailForm, newEmail: e.target.value })} className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg outline-none" required />
-                  </div>
-                  <div className="flex gap-2 mt-6">
-                    <button type="button" onClick={() => setShowEmailModal(false)} className="flex-1 py-2 border border-gray-200 font-bold text-[10px] uppercase tracking-widest text-gray-500 rounded-lg">Cancel</button>
-                    <button type="submit" disabled={pwLoading} className="flex-1 bg-black text-white py-2 font-bold text-[10px] uppercase tracking-widest rounded-lg">Send OTP</button>
-                  </div>
-                </form>
-              ) : (
-                <form onSubmit={handleEmailChangeVerify} className="space-y-4">
-                  <p className="text-xs text-gray-500 mb-2">Please enter the 6-digit verification code sent to <b>{emailForm.newEmail}</b></p>
-                  <div className="space-y-1">
-                    <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Verification Code</label>
-                    <input type="text" maxLength={6} value={emailForm.otp} onChange={e => setEmailForm({ ...emailForm, otp: e.target.value })} className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg outline-none" placeholder="123456" required />
-                  </div>
-                  <div className="flex gap-2 mt-6">
-                    <button type="button" onClick={() => setEmailModalMode('request')} className="flex-1 py-2 border border-gray-200 font-bold text-[10px] uppercase tracking-widest text-gray-500 rounded-lg">Back</button>
-                    <button type="submit" disabled={pwLoading} className="flex-1 bg-black text-white py-2 font-bold text-[10px] uppercase tracking-widest rounded-lg">Verify & Update</button>
-                  </div>
-                </form>
-              )}
+                {emailModalMode === 'request' ? (
+                  <form onSubmit={handleEmailChangeRequest} className="space-y-5">
+                    <div className="border border-gray-200 bg-[#fbfaf7] px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center border border-gray-200 bg-white text-gray-900">
+                          <ShieldCheck size={16} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-900">Send Verification Email</p>
+                          <p className="mt-1 text-xs leading-5 text-gray-500">We will send a 6-digit OTP to the new email address before replacing your current login email.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-[0.24em] text-gray-400">New Email Address</label>
+                      <input
+                        type="email"
+                        value={emailForm.newEmail}
+                        onChange={e => setEmailForm({ ...emailForm, newEmail: e.target.value })}
+                        className="w-full border border-gray-300 bg-white px-3 py-3 text-sm outline-none transition focus:border-black"
+                        placeholder="owner@restaurant.com"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button type="button" onClick={() => setShowEmailModal(false)} className="flex-1 border border-gray-200 px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500 transition hover:border-gray-300 hover:text-gray-700">Cancel</button>
+                      <button type="submit" disabled={pwLoading} className="flex flex-1 items-center justify-center gap-2 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white transition disabled:opacity-50">
+                        Send OTP
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleEmailChangeVerify} className="space-y-5">
+                    <div className="border border-gray-200 bg-[#fbfaf7] px-4 py-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-gray-900">Verification Sent</p>
+                      <p className="mt-1 text-xs leading-5 text-gray-500">
+                        Enter the 6-digit code sent to <span className="font-semibold text-gray-900">{emailForm.newEmail}</span>.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[9px] font-black uppercase tracking-[0.24em] text-gray-400">Verification Code</label>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        value={emailForm.otp}
+                        onChange={e => setEmailForm({ ...emailForm, otp: e.target.value.replace(/\D/g, '') })}
+                        className="w-full border border-gray-300 bg-white px-3 py-3 text-center text-lg font-black tracking-[0.45em] outline-none transition focus:border-black"
+                        placeholder="123456"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button type="button" onClick={() => setEmailModalMode('request')} className="flex-1 border border-gray-200 px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-gray-500 transition hover:border-gray-300 hover:text-gray-700">Back</button>
+                      <button type="submit" disabled={pwLoading} className="flex flex-1 items-center justify-center gap-2 bg-black px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-white transition disabled:opacity-50">
+                        Verify Email
+                        <ArrowRight size={14} />
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
             </motion.div>
           </div>
         )}
@@ -1401,9 +1594,9 @@ export default function OwnerDashboard() {
         {showItemModal && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowItemModal(false)} className="absolute inset-0 bg-gray-900/30 backdrop-blur-sm" />
-            <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 20, opacity: 0 }} className="relative bg-white w-full max-w-md p-6 rounded-xl shadow-2xl overflow-y-auto max-h-[90vh]">
+            <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 20, opacity: 0 }} className="relative bg-white w-full max-w-xl p-5 rounded-xl shadow-2xl overflow-y-auto max-h-[90vh] sm:p-6">
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-base font-black tracking-tight uppercase">Dish draft</h3>
+                <h3 className="text-base font-black tracking-tight uppercase">{editingItemId ? 'Edit Dish' : 'Dish draft'}</h3>
                 <button onClick={() => setShowItemModal(false)} className="p-1 hover:bg-gray-100 transition rounded-md text-gray-400"><X size={18} /></button>
               </div>
               <div className="space-y-4">
@@ -1428,6 +1621,34 @@ export default function OwnerDashboard() {
                   <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Descriptor</label>
                   <textarea value={newItem.description} onChange={e => setNewItem({ ...newItem, description: e.target.value })} className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg min-h-[60px] outline-none" />
                 </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Chatbot Tags</label>
+                    <span className="text-[10px] font-semibold text-gray-400">{(newItem.tags || []).length} selected</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {CHATBOT_CRAVING_TAGS.map((tag) => {
+                      const isActive = (newItem.tags || []).includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => toggleItemTag(tag)}
+                          className={`rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.12em] transition ${
+                            isActive
+                              ? 'border-black bg-black text-white'
+                              : 'border-gray-300 bg-white text-gray-600 hover:border-black hover:text-black'
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[10px] leading-5 text-gray-400">
+                    These tags power the chatbot recommendations. Pick the tags that match this dish.
+                  </p>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Diet Type</label>
@@ -1445,7 +1666,9 @@ export default function OwnerDashboard() {
               </div>
               <div className="flex gap-2 mt-8">
                 <button onClick={() => setShowItemModal(false)} className="flex-1 py-2 border border-gray-200 font-bold text-[10px] uppercase tracking-widest text-gray-500 rounded-lg">Cancel</button>
-                <button onClick={handleAddItem} className="flex-1 bg-black text-white py-2 font-bold text-[10px] uppercase tracking-widest rounded-lg">Create</button>
+                <button onClick={handleAddItem} disabled={actionLoading} className="flex-1 bg-black text-white py-2 font-bold text-[10px] uppercase tracking-widest rounded-lg disabled:opacity-50">
+                  {editingItemId ? 'Update' : 'Create'}
+                </button>
               </div>
             </motion.div>
           </div>
@@ -1472,6 +1695,86 @@ export default function OwnerDashboard() {
             </motion.div>
           </div>
         )}
+
+        <Modal
+          open={Boolean(pinModalOrder)}
+          onClose={closePinModal}
+          title="Verify Customer PIN"
+          description={pinModalOrder ? `Order #${pinModalOrder.orderIdString || pinModalOrder._id} is waiting for customer verification before completion.` : ''}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={handleResendPin}
+                disabled={pinSubmitting || pinResending}
+                className="flex-1 rounded-2xl border border-[#cdbfaa] bg-white px-4 py-3 text-[10px] font-black uppercase tracking-[0.24em] text-[#554a3f] transition hover:bg-[#f2e9de] disabled:opacity-60"
+              >
+                {pinResending ? 'Sending...' : 'Resend PIN'}
+              </button>
+              <button
+                type="button"
+                onClick={handleVerifyPin}
+                disabled={pinSubmitting || pinResending}
+                className="flex-1 rounded-2xl bg-[#111111] px-4 py-3 text-[10px] font-black uppercase tracking-[0.24em] text-white transition hover:bg-[#2b2b2b] disabled:opacity-60"
+              >
+                {pinSubmitting ? 'Verifying...' : 'Complete Order'}
+              </button>
+            </>
+          }
+        >
+          {pinModalOrder && (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-[#d9cfbf] bg-white p-4">
+                <p className="text-[10px] font-black uppercase tracking-[0.22em] text-[#6d655c]">Guest</p>
+                <p className="mt-2 text-lg font-semibold text-[#111111]">{pinModalOrder.customerName}</p>
+                <p className="mt-1 text-sm text-[#5c564e]">
+                  {pinModalOrder.tableNumber ? `Table ${pinModalOrder.tableNumber}` : pinModalOrder.orderType || 'Takeaway'}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[10px] font-black uppercase tracking-[0.22em] text-[#6d655c]">
+                  Enter PIN
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoFocus
+                  maxLength={6}
+                  value={pinValue}
+                  onChange={(event) => {
+                    setPinValue(event.target.value.replace(/\D/g, '').slice(0, 6));
+                    if (pinError) setPinError('');
+                    if (pinNotice) setPinNotice('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleVerifyPin();
+                    }
+                  }}
+                  className="w-full rounded-2xl border border-[#cdbfaa] bg-white px-4 py-4 text-center font-mono text-2xl tracking-[0.5em] text-[#111111] outline-none transition focus:border-[#111111]"
+                  placeholder="000000"
+                />
+                <p className="text-xs leading-5 text-[#6d655c]">
+                  Ask the customer for the PIN from their confirmation email. The order completes only after a successful match.
+                </p>
+              </div>
+
+              {pinError && (
+                <div className="rounded-2xl border border-[#fecaca] bg-[#fef2f2] px-4 py-3 text-sm text-[#b91c1c]">
+                  {pinError}
+                </div>
+              )}
+
+              {pinNotice && (
+                <div className="rounded-2xl border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-sm text-[#166534]">
+                  {pinNotice}
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
       </AnimatePresence>
 
       <style>{`

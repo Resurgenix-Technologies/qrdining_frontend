@@ -29,7 +29,7 @@ export default function MenuTab({
             <button onClick={() => setShowCategoryModal(true)} className="bg-white border border-border text-black px-4 py-2 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2 rounded-lg hover:bg-gray-50 transition shadow-sm">
               <Plus size={14} /> Add Category
             </button>
-            <button onClick={() => setShowItemModal(true)} className="bg-black text-white px-4 py-2 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2 rounded-lg hover:bg-gray-800 transition shadow-sm">
+            <button onClick={() => { setEditingItemId(null); setNewItem({ name: '', price: '', categoryId: '', description: '', dietType: 'veg', tags: [], imageFile: null }); setShowItemModal(true); }} className="bg-black text-white px-4 py-2 font-bold uppercase text-[10px] tracking-widest flex items-center gap-2 rounded-lg hover:bg-gray-800 transition shadow-sm">
               <Plus size={14} /> Add Item
             </button>
           </div>
@@ -80,7 +80,7 @@ export default function MenuTab({
                     </div>
                     {!isReadOnly && (
                       <div className="flex items-center gap-1">
-                        <button onClick={() => { setEditingItemId(item._id); setNewItem({ name: item.name, price: item.price, categoryId: item.categoryId, description: item.description || '', dietType: item.dietType || 'veg', imageFile: null }); setShowItemModal(true); }} className="text-gray-400 hover:text-blue-500 transition p-1 rounded-md hover:bg-blue-50"><Edit size={12} /></button>
+                        <button onClick={() => { setEditingItemId(item._id); setNewItem({ name: item.name, price: item.price, categoryId: item.categoryId, description: item.description || '', dietType: item.dietType || 'veg', tags: Array.isArray(item.tags) ? item.tags : [], imageFile: null }); setShowItemModal(true); }} className="text-gray-400 hover:text-blue-500 transition p-1 rounded-md hover:bg-blue-50"><Edit size={12} /></button>
                         <button onClick={() => handleDeleteItem(item._id)} className="text-gray-400 hover:text-red-500 transition p-1 rounded-md hover:bg-red-50"><Trash2 size={12} /></button>
                       </div>
                     )}

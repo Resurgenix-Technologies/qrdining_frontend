@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '');
   const apiTarget = env.VITE_DEV_API_TARGET
     || (env.VITE_API_URL ? env.VITE_API_URL.replace(/\/api\/?$/, '') : '')
-    || 'http://localhost:5000';
+    || 'http://localhost:5001';
 
   return {
     plugins: [react(), tailwindcss()],
